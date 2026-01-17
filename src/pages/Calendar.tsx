@@ -31,7 +31,15 @@ export default function MyCalendar() {
                 ? "border-4 border-green-600 text-gray-800"
                 : "",
               // Hover effect - only outline pops
-              "hover:border-4 hover:border-green-600 hover:bg-black-50"
+              "hover:border-4 hover:border-green-600 hover:bg-black-50", "cursor-pointer transition-colors",
+              // Highlight today
+              tileDate.toDateString() === new Date().toDateString()
+                ? "today-highlight"
+                : "",
+              // Highlight selected date - only outline pops
+              tileDate.toDateString() === date.toDateString()
+                ? "selected-date"
+                : ""
             );
           }
           return "";
