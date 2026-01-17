@@ -1,161 +1,121 @@
-body {
-  margin: 0;
-  font-family: system-ui, -apple-system, sans-serif;
-  background: #0f172a;
+/* Custom highlight classes */
+.react-calendar__tile.today-highlight {
+  border: 4px solid #4a7c59 !important;
+  background: #2a2a2a !important;
+  color: white !important;
+  font-weight: 600 !important;
+}
+
+.react-calendar__tile.selected-date {
+  border: 4px solid #4a7c59 !important;
+  background: #2a2a2a !important;
+  color: white !important;
+  font-weight: bold !important;
+}
+
+/* Calendar styling for black background and white text */
+.react-calendar {
+  background-color: #1a1a1a;
   color: white;
-}
-
-/* ---------- Auth ---------- */
-
-.auth-page {
-  min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.auth-card {
-  background: #020617;
-  padding: 36px;
-  width: 340px;
-  border-radius: 14px;
-  box-shadow: 0 20px 40px rgba(0,0,0,0.4);
+  border: none;
+  padding: 30px;
+  font-size: 18px;
+  width: 100%;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  text-align: center;
+  align-items: center;
 }
 
-.auth-card-heading {
+.react-calendar__tile {
+  color: white;
+  background: #2a2a2a;
+  padding: 8px 18px 18px 18px;
+  font-size: 18px;
+  min-height: 80px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  border-radius: 0;
+  border: none !important;
+}
+
+/* Hover effect */
+.react-calendar__tile:hover {
+  background: #2a2a2a;
+  color: black;
+}
+
+/* Selected day */
+.react-calendar__tile--active {
+  background: #2a2a2a !important;
+  color: white !important;
+  font-weight: bold;
+  border-radius: 0;
+  border: 4px solid #4a7c59 !important;
+}
+
+/* Year view - remove active state styling */
+.react-calendar__year-view .react-calendar__tile--active {
+  border: none !important;
+}
+
+/* Today */
+.react-calendar__tile--now {
+  color: white;
+  font-weight: 600;
+}
+
+/* Outside dates (from other months) */
+.react-calendar__tile--outside {
+  border: none !important;
+}
+
+/* Navigation styling */
+.react-calendar__navigation {
+  color: white;
+  margin-bottom: 30px;
+  padding: 20px;
+  border-radius: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 12px;
+  justify-content: space-between;
+  gap: 20px;
 }
 
-.logo {
-  width: 40px;
-  height: 40px;
-  display: inline-block;
+.react-calendar__navigation__label {
+  border: none !important;
 }
 
-.subtitle {
-  color: #94a3b8;
-  font-size: 0.9rem;
+.react-calendar__navigation button {
+  color: white;
+  background-color: #404040;
+  border: none;
+  padding: 12px 16px;
+  margin: 0;
+  border-radius: 0;
+  font-size: 16px;
+  font-weight: bold;
+}
+
+.react-calendar__navigation button:hover {
+  background-color: white;
+  color: #1a1a1a;
+}
+
+.react-calendar__navigation button:active {
+  background-color: #000000 !important;
+  color: white !important;
+}
+
+.react-calendar__month-view__days__day-names {
+  color: white;
   margin-bottom: 10px;
 }
 
-.input {
-  padding: 12px;
-  border-radius: 8px;
-  border: none;
-  outline: none;
-}
-
-.button {
-  padding: 12px;
-  border-radius: 8px;
-  border: none;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.button:hover {
-  opacity: 0.9;
-}
-
-.error {
-  color: #f87171;
-  font-size: 0.85rem;
-}
-
-.signup-text {
-  font-size: 0.85rem;
-  color: #94a3b8;
-}
-
-.signup-text span {
-  color: #38bdf8;
-  cursor: pointer;
-}
-
-.signup-text span:hover {
-  text-decoration: underline;
-}
-
-/* ---------- Layout ---------- */
-
-.center {
-  min-height: calc(100vh - 60px);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-}
-
-/* ---------- Navbar ---------- */
-
-.navbar {
-  height: 60px;
-  background: #020617;
-  display: flex;
-  align-items: center;
-  position: relative;
-}
-
-.icon-button {
-  position: fixed; /* fixed to the viewport so it's in the far top-left corner */
-  left: 12px;
-  top: 12px;
-  background: none;
-  border: none;
+.react-calendar__month-view__days__day-names__day-name {
   color: white;
-  cursor: pointer;
-  padding: 8px;
-}
-
-.navbar-logo {
-  width: 40px;
-  height: 40px;
-  display: inline-block;
-}
-
-.navbar-title {
-  margin: 0;
-  font-size: 1.1rem;
-}
-
-.navbar-brand {
-  position: fixed; /* fixed to the viewport so it's in the far top-right corner */
-  right: 12px;
-  top: 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.icon-button {
-  z-index: 20;
-}
-
-.navbar-brand {
-  z-index: 10;
-}
-
-.dropdown {
-  position: absolute;
-  top: 60px;
-  left: 16px;
-  background: #020617;
-  border-radius: 8px;
-  padding: 8px;
-  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
-}
-
-.dropdown button {
-  background: none;
-  border: none;
-  color: white;
-  cursor: pointer;
-  padding: 8px 12px;
+  font-weight: bold;
+  font-size: 16px;
+  padding: 10px;
 }
