@@ -1,27 +1,23 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { signIn } from '../lib/auth'
+import { signUp } from '../lib/auth'
 import Input from '../components/Input'
 import Button from '../components/Button'
 import logo from '../assets/timepilot-logo.png'
 
-export default function Login() {
+export default function Signup() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const navigate = useNavigate()
 
-  const handleLogin = async () => {
+  const handleSignup = async () => {
     setLoading(true)
     setError(null)
 
-    const { error } = await signIn(email, password)
-    if (error) {
-      const msg = error.message || ''
-      const pretty = msg ? msg.charAt(0).toUpperCase() + msg.slice(1) : msg
-      setError(pretty)
-    }
+    const { error } = await signUp(email, password)
+    if (error) setError(error.message)
 
     setLoading(false)
   }
@@ -31,10 +27,10 @@ export default function Login() {
       <div className="auth-card">
         <div className="auth-card-heading">
           <img src={logo} alt="TimePilot" className="logo" />
-          <h1>TimePilot</h1>
+          <h1>Create account</h1>
         </div>
         <p className="subtitle">
-          Plan days you can actually finish.
+          Start planning smarter days.
         </p>
 
         <Input
@@ -53,14 +49,14 @@ export default function Login() {
 
         {error && <p className="error">{error}</p>}
 
-        <Button onClick={handleLogin} disabled={loading}>
-          Log In
+        <Button onClick={handleSignup} disabled={loading}>
+          Sign Up
         </Button>
 
         <p className="signup-text">
-          Don’t have an account?{' '}
-          <span onClick={() => navigate('/signup')}>
-            Sign up
+          Already have an account?{' '}
+          <span onClick={() => navigate('/login')}>
+            Log in
           </span>
         </p>
       </div>
