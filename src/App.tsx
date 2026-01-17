@@ -1,61 +1,48 @@
-import { BrowserRouter, Routes, Route, Link, useParams } from 'react-router-dom'
-
-// --- Components ---
-
-function Calendar() {
-  return (
-    <div className="p-10 text-center">
-      <h1 className="text-4xl font-bold text-blue-600 mb-4">TimePilot Calendar</h1>
-      <p className="mb-4">Select a date to plan your day.</p>
-      <Link to="/day/2026-01-17" className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition">
-        Test: Go to Jan 17
-      </Link>
-    </div>
-  )
-}
+import { BrowserRouter, Routes, Route, Link, useParams } from "react-router-dom";
+import MyCalendar from "./pages/Calendar"; // import the styled calendar
 
 function DayView() {
-  const { date } = useParams() // This grabs the date from the URL
+  const { date } = useParams();
   return (
     <div className="p-10">
-      <h1 className="text-3xl font-bold mb-4">Planning for: {date}</h1>
-      <div className="border p-4 rounded bg-gray-50">
+      <h1 className="text-3xl font-bold mb-4 text-white">Planning for: {date}</h1>
+      <div className="border p-4 rounded bg-gray-900 text-white">
         <p>Task list will go here...</p>
       </div>
-      <Link to="/" className="text-blue-500 underline mt-4 block">
+      <Link to="/" className="text-green-500 underline mt-4 block hover:text-green-400">
         ← Back to Calendar
       </Link>
     </div>
-  )
+  );
 }
 
 function Login() {
   return (
     <div className="p-10 text-center">
-      <h1 className="text-2xl">Login Page</h1>
+      <h1 className="text-2xl text-white">Login Page</h1>
     </div>
-  )
+  );
 }
-
-// --- Main App ---
 
 function App() {
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-white text-gray-900">
-        <nav className="p-4 border-b shadow-sm flex justify-between items-center">
+      <div className="min-h-screen bg-black text-white">
+        <nav className="p-4 border-b shadow-sm flex justify-between items-center bg-gray-900">
           <span className="font-bold text-xl">TimePilot</span>
-          <Link to="/login" className="text-sm text-gray-600">Login</Link>
+          <Link to="/login" className="text-sm text-gray-400">
+            Login
+          </Link>
         </nav>
 
         <Routes>
-          <Route path="/" element={<Calendar />} />
+          <Route path="/" element={<MyCalendar />} />
           <Route path="/day/:date" element={<DayView />} />
           <Route path="/login" element={<Login />} />
         </Routes>
       </div>
     </BrowserRouter>
-  )
+  );
 }
 
-export default App
+export default App;
