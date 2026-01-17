@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Link, useParams } from 'react-router-dom'
+import MyCalendar from "./pages/Calendar.tsx";
 
 // --- Components ---
 
@@ -7,6 +8,7 @@ function Calendar() {
     <div className="p-10 text-center">
       <h1 className="text-4xl font-bold text-blue-600 mb-4">TimePilot Calendar</h1>
       <p className="mb-4">Select a date to plan your day.</p>
+      <MyCalendar />
       <Link to="/day/2026-01-17" className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition">
         Test: Go to Jan 17
       </Link>
