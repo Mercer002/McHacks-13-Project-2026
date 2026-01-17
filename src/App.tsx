@@ -1,48 +1,82 @@
-import { BrowserRouter, Routes, Route, Link, useParams } from "react-router-dom";
-import MyCalendar from "./pages/Calendar"; // import the styled calendar
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import { supabase } from './lib/supabase'
 
-function DayView() {
-  const { date } = useParams();
-  return (
-    <div className="p-10">
-      <h1 className="text-3xl font-bold mb-4 text-white">Planning for: {date}</h1>
-      <div className="border p-4 rounded bg-gray-900 text-white">
-        <p>Task list will go here...</p>
-      </div>
-      <Link to="/" className="text-green-500 underline mt-4 block hover:text-green-400">
-        ← Back to Calendar
-      </Link>
-    </div>
-  );
-}
+// Pages
+import Login from './pages/Login'
+import Signup from './pages/Signup'
+import Calendar from './pages/Calendar'
+import Day from './pages/Day'
 
-function Login() {
-  return (
-    <div className="p-10 text-center">
-      <h1 className="text-2xl text-white">Login Page</h1>
-    </div>
-  );
-}
+// Components
+import Navbar from './components/Navbar'
 
-function App() {
+export default function App() {
+  const [session, setSession] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    // Get initial session
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session)
+      setLoading(false)
+    })
+
+    // Listen for auth changes
+    const { data: listener } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setSession(session)
+      }
+    )
+
+    return () => {
+      listener.subscription.unsubscribe()
+    }
+  }, [])
+
+  if (loading) {
+    return <div className="center">Loading...</div>
+  }
+
   return (
     <BrowserRouter>
-      <div className="min-h-screen bg-black text-white">
-        <nav className="p-4 border-b shadow-sm flex justify-between items-center bg-gray-900">
-          <span className="font-bold text-xl">TimePilot</span>
-          <Link to="/login" className="text-sm text-gray-400">
-            Login
-          </Link>
-        </nav>
+      {/* Navbar only shows when logged in */}
+      {session && <Navbar />}
 
-        <Routes>
-          <Route path="/" element={<MyCalendar />} />
-          <Route path="/day/:date" element={<DayView />} />
-          <Route path="/login" element={<Login />} />
-        </Routes>
-      </div>
+      <Routes>
+        {/* ---------- AUTH ---------- */}
+        <Route
+          path="/login"
+          element={!session ? <Login /> : <Navigate to="/calendar" />}
+        />
+
+        <Route
+          path="/signup"
+          element={!session ? <Signup /> : <Navigate to="/calendar" />}
+        />
+
+        {/* ---------- APP ---------- */}
+        <Route
+          path="/calendar"
+          element={session ? <Calendar /> : <Navigate to="/login" />}
+        />
+
+        <Route
+          path="/day/:date"
+          element={session ? <Day /> : <Navigate to="/login" />}
+        />
+
+        {/* ---------- DEFAULT ---------- */}
+        <Route
+          path="/"
+          element={<Navigate to={session ? '/calendar' : '/login'} />}
+        />
+
+        <Route
+          path="*"
+          element={<Navigate to={session ? '/calendar' : '/login'} />}
+        />
+      </Routes>
     </BrowserRouter>
-  );
+  )
 }
-
-export default App;
