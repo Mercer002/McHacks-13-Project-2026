@@ -9,8 +9,8 @@ export default function MyCalendar() {
   const [date, setDate] = useState<Date>(new Date());
 
   return (
-    <div className="max-w-6xl mx-auto p-8 bg-black shadow-xl rounded-xl min-h-screen">
-      <h2 className="text-5xl font-bold mb-12 text-center text-white h-20 flex items-center justify-center">My Calendar</h2>
+    <div className="max-w-6xl mx-auto p-2 bg-black">
+      <h2 className="text-5xl font-bold mb-6 text-center text-white h-20 flex items-center justify-center">My Calendar</h2>
 
       <Calendar
         value={date}
@@ -24,14 +24,14 @@ export default function MyCalendar() {
               "bg-gray-50 text-gray-800",
               // Highlight today
               tileDate.toDateString() === new Date().toDateString()
-                ? "border-4 border-blue-400 text-blue-700 font-bold bg-blue-100"
+                ? "border-4 border-green-600 text-green-700 font-bold bg-green-100"
                 : "",
-              // Highlight selected date
+              // Highlight selected date - only outline pops
               tileDate.toDateString() === date.toDateString()
-                ? "bg-blue-600 text-white font-bold"
+                ? "border-4 border-green-600 text-gray-800"
                 : "",
-              // Hover effect
-              "hover:bg-blue-200"
+              // Hover effect - only outline pops
+              "hover:border-4 hover:border-green-600 hover:bg-black-50"
             );
           }
           return "";
@@ -44,7 +44,7 @@ export default function MyCalendar() {
       />
 
       <p className="mt-12 text-center text-white text-2xl mb-16">
-        Selected date: <span className="font-semibold text-blue-400">{date.toDateString()}</span>
+        Selected date: <span className="font-semibold text-green-500">{date.toDateString()}</span>
       </p>
       
       <div className="bg-gray-900 rounded-lg p-8 min-h-96 text-white text-lg">
