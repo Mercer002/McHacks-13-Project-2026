@@ -1,32 +1,60 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { BrowserRouter, Routes, Route, Link, useParams } from 'react-router-dom'
+
+// --- Components ---
+
+function Calendar() {
+  return (
+    <div className="p-10 text-center">
+      <h1 className="text-4xl font-bold text-blue-600 mb-4">TimePilot Calendar</h1>
+      <p className="mb-4">Select a date to plan your day.</p>
+      <Link to="/day/2026-01-17" className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition">
+        Test: Go to Jan 17
+      </Link>
+    </div>
+  )
+}
+
+function DayView() {
+  const { date } = useParams() // This grabs the date from the URL
+  return (
+    <div className="p-10">
+      <h1 className="text-3xl font-bold mb-4">Planning for: {date}</h1>
+      <div className="border p-4 rounded bg-gray-50">
+        <p>Task list will go here...</p>
+      </div>
+      <Link to="/" className="text-blue-500 underline mt-4 block">
+        ← Back to Calendar
+      </Link>
+    </div>
+  )
+}
+
+function Login() {
+  return (
+    <div className="p-10 text-center">
+      <h1 className="text-2xl">Login Page</h1>
+    </div>
+  )
+}
+
+// --- Main App ---
 
 function App() {
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
+    <BrowserRouter>
+      <div className="min-h-screen bg-white text-gray-900">
+        <nav className="p-4 border-b shadow-sm flex justify-between items-center">
+          <span className="font-bold text-xl">TimePilot</span>
+          <Link to="/login" className="text-sm text-gray-600">Login</Link>
+        </nav>
+
+        <Routes>
+          <Route path="/" element={<Calendar />} />
+          <Route path="/day/:date" element={<DayView />} />
+          <Route path="/login" element={<Login />} />
+        </Routes>
       </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
+    </BrowserRouter>
   )
 }
 
