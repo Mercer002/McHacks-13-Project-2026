@@ -1,6 +1,5 @@
-import { BrowserRouter, Routes, Route, Link, useParams } from 'react-router-dom'
-
-// --- Components ---
+import { BrowserRouter, Routes, Route, Link } from 'react-router-dom'
+import Day from './pages/Day' // <--- This must say 'DayView'// --- Components ---
 
 function Calendar() {
   return (
@@ -9,21 +8,6 @@ function Calendar() {
       <p className="mb-4">Select a date to plan your day.</p>
       <Link to="/day/2026-01-17" className="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600 transition">
         Test: Go to Jan 17
-      </Link>
-    </div>
-  )
-}
-
-function DayView() {
-  const { date } = useParams() // This grabs the date from the URL
-  return (
-    <div className="p-10">
-      <h1 className="text-3xl font-bold mb-4">Planning for: {date}</h1>
-      <div className="border p-4 rounded bg-gray-50">
-        <p>Task list will go here...</p>
-      </div>
-      <Link to="/" className="text-blue-500 underline mt-4 block">
-        ← Back to Calendar
       </Link>
     </div>
   )
@@ -50,7 +34,7 @@ function App() {
 
         <Routes>
           <Route path="/" element={<Calendar />} />
-          <Route path="/day/:date" element={<DayView />} />
+          <Route path="/day/:date" element={<Day />} />
           <Route path="/login" element={<Login />} />
         </Routes>
       </div>
