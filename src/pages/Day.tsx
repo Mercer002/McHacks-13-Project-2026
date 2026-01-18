@@ -6,9 +6,15 @@ import { supabase } from '../lib/supabase'
 import { getTasksForDate, saveTasksForDate } from '../lib/taskStore'
 import type { Task } from '../lib/taskStore'
 
-export default function DayView() {
+type Props = {
+  userId: string
+}
+
+export default function DayView({ userId }: Props) {
     const { date } = useParams()
     const [tasks, setTasks] = useState<Task[]>([])
+    const [error, setError] = useState<string | null>(null)
+    const [saving, setSaving] = useState(false)
 
     const parsedDate = useMemo(() => {
         if (!date) return new Date()
@@ -20,8 +26,16 @@ export default function DayView() {
     const dateKey = useMemo(() => format(parsedDate, 'yyyy-MM-dd'), [parsedDate])
 
     useEffect(() => {
-        setTasks(getTasksForDate(dateKey))
-    }, [dateKey])
+        try {
+            const data = getTasksForDate(userId, dateKey)
+            setTasks(data ?? [])
+            setError(null)
+        } catch (err) {
+            console.error('Task load error', err)
+            setError('Unable to load tasks right now.')
+            setTasks([])
+        }
+    }, [userId, dateKey])
 
     // --- CONFIGURATION ---
     const startHour = 0
@@ -41,21 +55,42 @@ export default function DayView() {
     const [showAdd, setShowAdd] = useState(false)
 
     // --- ACTIONS ---
-    const addTask = (e: React.FormEvent) => {
+    const persistTasks = async (next: Task[]) => {
+        setSaving(true)
+        try {
+            saveTasksForDate(userId, dateKey, next)
+            setError(null)
+        } catch (err) {
+            console.error('Save error', err)
+            setError('Could not save tasks. Changes may be local only.')
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    const makeTaskId = () => {
+        if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+            return crypto.randomUUID()
+        }
+        return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+    }
+
+    const addTask = async (e: React.FormEvent) => {
         e.preventDefault()
         if (!taskName) return
         const composedTime = `${taskHour.padStart(2, '0')}:${taskMinute.padStart(2, '0')}`
         const newTask: Task = {
-            id: Date.now(),
+            id: makeTaskId(),
             title: taskName,
             completed: false,
             time: composedTime,
             duration: taskDuration,
-            category: taskCategory
+            category: taskCategory,
+            dateKey,
         }
         const updated = [...tasks, newTask]
         setTasks(updated)
-        saveTasksForDate(dateKey, updated)
+        await persistTasks(updated)
         setTaskName('')
         setTaskHour('09')
         setTaskMinute('00')
@@ -63,10 +98,10 @@ export default function DayView() {
         setShowAdd(false)
     }
 
-    const toggleTask = (id: number) => {
+    const toggleTask = async (id: string) => {
         const updated = tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t)
         setTasks(updated)
-        saveTasksForDate(dateKey, updated)
+        await persistTasks(updated)
     }
 
     // --- Completion modal flow ---
@@ -111,13 +146,12 @@ export default function DayView() {
         }
 
         try {
-            // Attach authenticated user info (id and email) so records are per-user
             const { data: userData, error: userErr } = await supabase.auth.getUser()
             if (userErr) console.warn('Could not fetch user from supabase.auth.getUser()', userErr)
 
             const enriched = {
                 ...record,
-                user_id: userData?.user?.id ?? null,
+                user_id: userId,
                 user_email: userData?.user?.email ?? null,
             }
 
@@ -135,17 +169,17 @@ export default function DayView() {
         // Mark the task completed locally and persist
         const updated = tasks.map(t => t.id === modalTask.id ? { ...t, completed: true } : t)
         setTasks(updated)
-        saveTasksForDate(dateKey, updated)
+        await persistTasks(updated)
 
         // close modal
         setShowCompleteModal(false)
         setModalTask(null)
     }
 
-    const deleteTask = (id: number) => {
+    const deleteTask = async (id: string) => {
         const updated = tasks.filter(t => t.id !== id)
         setTasks(updated)
-        saveTasksForDate(dateKey, updated)
+        await persistTasks(updated)
     }
 
     // --- LAYOUT LOGIC ---
@@ -179,11 +213,21 @@ export default function DayView() {
 
     const hours = Array.from({ length: endHour - startHour + 1 }, (_, i) => i + startHour)
     const taskColors = ['#2563eb', '#7c3aed', '#0891b2', '#16a34a', '#f97316', '#facc15']
+
+    const hashString = (value: string) => {
+        let hash = 0
+        for (let i = 0; i < value.length; i++) {
+            hash = (hash << 5) - hash + value.charCodeAt(i)
+            hash |= 0 // force 32-bit
+        }
+        return Math.abs(hash)
+    }
+
     const getTaskColor = (task: Task) => {
         if (task.completed) {
             return { bg: '#27272a', border: '#3f3f46' }
         }
-        const color = taskColors[Math.abs(task.id) % taskColors.length]
+        const color = taskColors[hashString(task.id) % taskColors.length]
         return { bg: color, border: color }
     }
 
@@ -218,6 +262,12 @@ export default function DayView() {
                     {tasks.filter(t => t.completed).length} / {tasks.length} Completed
                 </div>
             </header>
+
+            {error && (
+                <div style={{ padding: '10px 24px', color: '#fca5a5', backgroundColor: '#3f1d2e', borderBottom: '1px solid #7f1d1d' }}>
+                    {error}
+                </div>
+            )}
 
             {/* Main Content Area */}
             <div className="flex-1 flex overflow-hidden" style={{ width: '100%', maxWidth: '100vw', minHeight: 0 }}>
@@ -350,6 +400,11 @@ export default function DayView() {
                             <Plus size={20} />
                         </button>
                     </div>
+                    {saving && (
+                        <div style={{ color: '#a5b4fc', fontSize: 12, marginBottom: 8 }}>
+                            Saving to cloud...
+                        </div>
+                    )}
 
                     <div className="space-y-3">
                         {sortedTasks.map(task => (

@@ -1,22 +1,27 @@
 export interface Task {
-  id: number
+  id: string
   title: string
   completed: boolean
   time: string // HH:mm
   duration: number // minutes
   category: string
+  dateKey: string
 }
 
-const STORAGE_KEY = 'timepilotTasks'
+const STORAGE_PREFIX = 'timepilotTasks:'
 
-type TaskMap = Record<string, Task[]>
+type TaskMap = Record<string, Task[]> // key: dateKey
 
 const isBrowser = typeof window !== 'undefined'
 
-function readStore(): TaskMap {
-  if (!isBrowser) return {}
+function storageKey(userId: string) {
+  return `${STORAGE_PREFIX}${userId}`
+}
+
+function readStore(userId: string): TaskMap {
+  if (!isBrowser || !userId) return {}
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const raw = window.localStorage.getItem(storageKey(userId))
     if (!raw) return {}
     const parsed = JSON.parse(raw)
     return parsed && typeof parsed === 'object' ? parsed : {}
@@ -25,23 +30,23 @@ function readStore(): TaskMap {
   }
 }
 
-function writeStore(data: TaskMap) {
-  if (!isBrowser) return
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+function writeStore(userId: string, data: TaskMap) {
+  if (!isBrowser || !userId) return
+  window.localStorage.setItem(storageKey(userId), JSON.stringify(data))
 }
 
-export function getTasksForDate(dateKey: string): Task[] {
-  const store = readStore()
+export function getTasksForDate(userId: string, dateKey: string): Task[] {
+  const store = readStore(userId)
   return store[dateKey] ? [...store[dateKey]] : []
 }
 
-export function saveTasksForDate(dateKey: string, tasks: Task[]) {
-  const store = readStore()
+export function saveTasksForDate(userId: string, dateKey: string, tasks: Task[]) {
+  const store = readStore(userId)
   store[dateKey] = tasks
-  writeStore(store)
+  writeStore(userId, store)
 }
 
-export function getDatesWithTasks(): Set<string> {
-  const store = readStore()
+export function getDatesWithTasks(userId: string): Set<string> {
+  const store = readStore(userId)
   return new Set(Object.keys(store).filter(key => store[key]?.length))
 }
