@@ -3,6 +3,7 @@ import { useParams, Link } from 'react-router-dom'
 import { parseISO, format } from 'date-fns'
 import { CheckCircle, Circle, Trash2, Plus, Clock, Calendar as CalIcon, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { analyzeEstimate } from '../lib/ai'
 import { getTasksForDate, saveTasksForDate } from '../lib/taskStore'
 import type { Task } from '../lib/taskStore'
 
@@ -53,6 +54,14 @@ export default function DayView({ userId }: Props) {
     const [taskCategory, setTaskCategory] = useState('Work')
     const [taskDuration, setTaskDuration] = useState(60)
     const [showAdd, setShowAdd] = useState(false)
+    const [aiSuggestion, setAiSuggestion] = useState<string | null>(null)
+    const [aiSuggestedDuration, setAiSuggestedDuration] = useState<number | null>(null)
+    const [aiFamily, setAiFamily] = useState<string | null>(null)
+    const [aiSampleSize, setAiSampleSize] = useState<number | null>(null)
+    const [aiComputedMedian, setAiComputedMedian] = useState<number | null>(null)
+    const [showAiModal, setShowAiModal] = useState(false)
+    const [pendingNewTask, setPendingNewTask] = useState<Task | null>(null)
+    // loading state intentionally omitted from UI for now
 
     // --- ACTIONS ---
     const persistTasks = async (next: Task[]) => {
@@ -75,6 +84,17 @@ export default function DayView({ userId }: Props) {
         return `${Date.now()}-${Math.random().toString(16).slice(2)}`
     }
 
+    const persistNewTask = async (t: Task) => {
+        const updated = [...tasks, t]
+        setTasks(updated)
+        await persistTasks(updated)
+        setTaskName('')
+        setTaskHour('09')
+        setTaskMinute('00')
+        setTaskDuration(60)
+        setShowAdd(false)
+    }
+
     const addTask = async (e: React.FormEvent) => {
         e.preventDefault()
         if (!taskName) return
@@ -88,14 +108,51 @@ export default function DayView({ userId }: Props) {
             category: taskCategory,
             dateKey,
         }
-        const updated = [...tasks, newTask]
-        setTasks(updated)
-        await persistTasks(updated)
-        setTaskName('')
-        setTaskHour('09')
-        setTaskMinute('00')
-        setTaskDuration(60)
-        setShowAdd(false)
+
+        // Call AI to analyze the estimate but do not block creation.
+        try {
+            const result = await analyzeEstimate(userId, newTask.title, newTask.duration)
+            if (result && result.message) {
+                setAiSuggestion(result.message)
+                setAiSuggestedDuration(result.suggestedDuration ?? null)
+                setAiFamily((result as any).family ?? null)
+                setAiSampleSize((result as any).sampleSize ?? null)
+                setAiComputedMedian((result as any).computedMedian ?? null)
+                setPendingNewTask(newTask)
+                setShowAiModal(true)
+                return
+            }
+        } catch (err) {
+            console.warn('AI analysis failed', err)
+        }
+
+        // No suggestion — persist immediately
+        await persistNewTask(newTask)
+    }
+
+    const acceptAiSuggestion = async () => {
+        if (!pendingNewTask) return
+        if (aiSuggestedDuration) pendingNewTask.duration = aiSuggestedDuration
+        await persistNewTask(pendingNewTask)
+        setPendingNewTask(null)
+        setShowAiModal(false)
+        setAiSuggestion(null)
+        setAiSuggestedDuration(null)
+        setAiFamily(null)
+        setAiSampleSize(null)
+        setAiComputedMedian(null)
+    }
+
+    const dismissAiSuggestion = async () => {
+        if (!pendingNewTask) return
+        await persistNewTask(pendingNewTask)
+        setPendingNewTask(null)
+        setShowAiModal(false)
+        setAiSuggestion(null)
+        setAiSuggestedDuration(null)
+        setAiFamily(null)
+        setAiSampleSize(null)
+        setAiComputedMedian(null)
     }
 
     const toggleTask = async (id: string) => {
@@ -549,6 +606,33 @@ export default function DayView({ userId }: Props) {
                                 Create Task
                             </button>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* AI Suggestion Modal */}
+            {showAiModal && aiSuggestion && (
+                <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 70 }}>
+                    <div style={{ backgroundColor: '#0b1222', borderRadius: '12px', padding: '20px', width: '100%', maxWidth: '520px', border: '1px solid #213547', color: '#e6eef8' }}>
+                        <h3 style={{ margin: 0, marginBottom: 8, fontSize: 18 }}>Suggestion from Assistant</h3>
+                        {aiFamily && (
+                            <div style={{ display: 'inline-block', marginBottom: 8 }}>
+                                <span style={{ fontSize: 12, padding: '6px 10px', borderRadius: 999, background: '#1e293b', color: '#c7d2fe', fontWeight: 700 }}>Detected: {aiFamily}</span>
+                            </div>
+                        )}
+                        {aiSampleSize != null && aiComputedMedian != null && (
+                            <div style={{ color: '#9fb4d6', fontSize: 13, marginTop: 8 }}>
+                                Based on {aiSampleSize} similar task{aiSampleSize !== 1 ? 's' : ''}, median was {aiComputedMedian} minutes.
+                            </div>
+                        )}
+                        <p style={{ color: '#cbd5e1', marginTop: aiFamily ? 8 : 0 }}>{aiSuggestion}</p>
+                        {aiSuggestedDuration && (
+                            <p style={{ color: '#9ae6b4', fontWeight: 700 }}>Suggested duration: {aiSuggestedDuration} minutes</p>
+                        )}
+                        <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                            <button onClick={acceptAiSuggestion} style={{ flex: 1, background: '#10b981', border: 'none', padding: '10px', borderRadius: 8, color: '#021012', fontWeight: 700 }}>Accept suggestion</button>
+                            <button onClick={dismissAiSuggestion} style={{ flex: 1, background: '#374151', border: 'none', padding: '10px', borderRadius: 8, color: '#fff' }}>Keep my estimate</button>
+                        </div>
                     </div>
                 </div>
             )}
