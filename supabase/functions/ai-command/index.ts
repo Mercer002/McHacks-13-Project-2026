@@ -111,10 +111,15 @@ Schema:
 }
 
 Rules:
-- If the user says "tonight", use dayKey and choose 19:00 if time missing.
-- If time is missing, pick a reasonable default.
-- If duration missing: yoga=60, restaurant=90, game=150.
-- Category: restaurant/yoga => Personal. Work keywords => Work. "urgent/ASAP" => Urgent.
+- Always return ONLY valid JSON (no markdown, no backticks).
+- If the user includes a place/address (e.g. "at ___", "in ___", "to ___", or a venue name), set "location" to that text.
+- If location is not mentioned, set "location" to null.
+- If the user says "tonight", use dayKey and default time 19:00 if missing.
+- If time is missing, pick a reasonable default based on the text.
+- If duration missing: yoga=60, restaurant=90, game=150, meeting=60.
+- Category: restaurant/yoga/gym => Personal. Work keywords => Work. Urgent if user says urgent/ASAP.
+- "time" must be in 24h format "HH:mm".
+- "day" must be "YYYY-MM-DD" (use dayKey if not specified).
 `;
 
     const geminiRes = await fetch(
@@ -152,7 +157,7 @@ Rules:
     try {
       parsed = JSON.parse(cleaned);
     } catch {
-      return jsonResponse(
+      return json(
         { error: "Gemini returned non-JSON", raw: textOut, cleaned },
         502
       );

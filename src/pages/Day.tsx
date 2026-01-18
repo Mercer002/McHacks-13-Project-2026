@@ -6,6 +6,41 @@ import { fetchTasksForDate, createTask, setTaskCompleted, deleteTaskById } from 
 import type { Task } from '../lib/tasksApi'
 import { supabase } from '../lib/supabase'
 
+function getCurrentLatLng(): Promise<{ lat: number; lng: number }> {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("Geolocation not supported"))
+      return
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (err) => reject(err),
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 30000 }
+    )
+  })
+}
+
+
+const hhmmToMinutes = (hhmm: string) => {
+  const [h, m] = hhmm.split(":").map(Number)
+  return h * 60 + m
+}
+const minutesToHHMM = (mins: number) => {
+  mins = Math.max(0, mins)
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`
+}
+
+type TravelMode = "DRIVE" | "WALK" | "BICYCLE" | "TRANSIT"
+
+const travelModeOptions: { value: TravelMode; label: string }[] = [
+  { value: "DRIVE", label: "Car" },
+  { value: "WALK", label: "Walk" },
+  { value: "BICYCLE", label: "Bike" },
+  { value: "TRANSIT", label: "Transit" },
+]
 
 
 export default function DayView() {
@@ -46,6 +81,11 @@ export default function DayView() {
     const [taskCategory, setTaskCategory] = useState('Work')
     const [taskDuration, setTaskDuration] = useState(60)
     const [showAdd, setShowAdd] = useState(false)
+    const [taskLocation, setTaskLocation] = useState("")
+    const [includeTravel, setIncludeTravel] = useState(true) // optional toggle
+    const [travelMode, setTravelMode] = useState<TravelMode>("DRIVE")
+
+
 
     // --- ACTIONS ---
     const addTask = async (e: React.FormEvent) => {
@@ -55,26 +95,131 @@ export default function DayView() {
         const composedTime = `${taskHour.padStart(2, '0')}:${taskMinute.padStart(2, '0')}`
 
         try {
-            const created = await createTask({
-            day: dateKey,
-            title: taskName,
-            time: composedTime,
-            duration: taskDuration,
-            category: taskCategory,
-            location: null,
-            })
+            const locationText = taskLocation.trim() ? taskLocation.trim() : null
 
-            setTasks((prev) => [...prev, created])
+            // ✅ If no location, create normal task (same as before)
+            if (!locationText) {
+                const created = await createTask({
+                day: dateKey,
+                title: taskName,
+                time: composedTime,
+                duration: taskDuration,
+                category: taskCategory,
+                location: null,
+                })
+                setTasks(prev => [...prev, created])
+            } else {
+                // ✅ If location exists, compute travel time + create travel + event
 
+                const { data: sessionData } = await supabase.auth.getSession()
+                const token = sessionData.session?.access_token
+                if (!token) throw new Error("No session token")
+
+                let origin: { lat: number; lng: number } | null = null
+                    try {
+                    origin = await getCurrentLatLng()
+                } catch (e) {
+                    console.warn("Geolocation failed (manual add) — creating task without travel", e)
+                }
+                if (!origin) {
+                    // GPS failed → create the event only (no travel)
+                    const created = await createTask({
+                        day: dateKey,
+                        title: taskName,
+                        time: composedTime,
+                        duration: taskDuration,
+                        category: taskCategory,
+                        location: locationText,
+                    })
+                    setTasks(prev => [...prev, created])
+                    // reset UI state
+                    setTaskName('')
+                    setTaskHour('09')
+                    setTaskMinute('00')
+                    setTaskDuration(60)
+                    setTaskLocation("")
+                    setShowAdd(false)
+                    return
+                }
+
+
+                const travelUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/travel-time`
+                const travelRes = await fetch(travelUrl, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`,
+                    "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
+                },
+                body: JSON.stringify({
+                    originLat: origin.lat,
+                    originLng: origin.lng,
+                    destinationText: locationText,
+                    travelMode,
+                }),
+                })
+
+                const travelData = await travelRes.json().catch(() => ({}))
+
+                // fallback: if Google fails, create event only
+                if (!travelRes.ok || !travelData?.travelMinutes) {
+                console.error("travel-time failed", travelRes.status, travelData)
+                const created = await createTask({
+                    day: dateKey,
+                    title: taskName,
+                    time: composedTime,
+                    duration: taskDuration,
+                    category: taskCategory,
+                    location: locationText,
+                })
+                setTasks(prev => [...prev, created])
+                } else {
+                const travelMinutes = travelData.travelMinutes as number
+                const resolvedLoc = travelData.resolvedAddress ?? locationText
+
+                const eventStart = hhmmToMinutes(composedTime)
+                const travelTime = minutesToHHMM(eventStart - travelMinutes)
+
+                // ✅ create travel block
+                const travelTask = await createTask({
+                    day: dateKey,
+                    title: `Travel to ${taskName}`,
+                    time: travelTime,
+                    duration: travelMinutes,
+                    category: taskCategory,
+                    location: resolvedLoc,
+                    is_travel: true,
+                    travel_minutes: travelMinutes,
+                })
+
+                // ✅ create the actual event
+                const eventTask = await createTask({
+                    day: dateKey,
+                    title: taskName,
+                    time: composedTime,
+                    duration: taskDuration,
+                    category: taskCategory,
+                    location: resolvedLoc,
+                    is_travel: false,
+                    travel_minutes: null,
+                })
+
+                setTasks(prev => [...prev, travelTask, eventTask])
+                }
+            }
+
+            // reset UI state
             setTaskName('')
             setTaskHour('09')
             setTaskMinute('00')
             setTaskDuration(60)
+            setTaskLocation("")
             setShowAdd(false)
         } catch (e) {
             console.error('createTask error', e)
             alert('Failed to create task (check console)')
         }
+
     }
 
 
@@ -111,6 +256,16 @@ export default function DayView() {
             const { data: sessionData } = await supabase.auth.getSession()
             const token = sessionData.session?.access_token
             if (!token) throw new Error("No session token")
+            
+            let origin: { lat: number; lng: number } | null = null
+                try {
+                origin = await getCurrentLatLng()
+            } catch (e) {
+                console.warn("Geolocation failed — continuing without travel time", e)
+                // optional: show user message once
+                // alert("Couldn't get your location. I'll add events without travel time.")
+            }
+
 
             const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-command`
 
@@ -141,17 +296,106 @@ export default function DayView() {
             }
 
             const tasksFromAi = data?.tasks ?? []
+
             for (const t of tasksFromAi) {
-            const created = await createTask({
-                day: t.day ?? dateKey,
-                title: t.title,
-                time: t.time,
-                duration: t.duration,
-                category: t.category,
-                location: t.location ?? null,
-            })
-            setTasks((prev) => [...prev, created])
+                const day = t.day ?? dateKey
+
+                // If no location → normal event task
+                if (!t.location) {
+                    const created = await createTask({
+                    day,
+                    title: t.title,
+                    time: t.time,
+                    duration: t.duration,
+                    category: t.category,
+                    location: null,
+                    })
+                    setTasks(prev => [...prev, created])
+                    continue
+                }
+                // no origin (geoloc failed) → create event only
+                if (!origin) {
+                    // GPS failed → create event only (no travel)
+                    const created = await createTask({
+                    day,
+                    title: t.title,
+                    time: t.time,
+                    duration: t.duration,
+                    category: t.category,
+                    location: t.location,
+                    })
+                    setTasks(prev => [...prev, created])
+                    continue
+                }
+
+                // Call travel-time function
+                const travelUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/travel-time`
+                const travelRes = await fetch(travelUrl, {
+                    method: "POST",
+                    headers: {
+                    "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`,
+                    "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
+                    },
+                    body: JSON.stringify({
+                    originLat: origin.lat,
+                    originLng: origin.lng,
+                    destinationText: t.location,
+                    travelMode,
+                    }),
+                })
+                const travelData = await travelRes.json()
+
+                // If travel compute fails → create event only
+                if (!travelRes.ok) {
+                    console.error("travel-time failed", travelRes.status, travelData)
+                    const created = await createTask({
+                    day,
+                    title: t.title,
+                    time: t.time,
+                    duration: t.duration,
+                    category: t.category,
+                    location: t.location,
+                    })
+                    setTasks(prev => [...prev, created])
+                    continue
+                }
+
+                const travelMinutes = travelData.travelMinutes as number
+                const resolvedLoc = travelData.resolvedAddress ?? t.location
+
+                // compute travel start
+                const eventStart = hhmmToMinutes(t.time)
+                const travelStart = eventStart - travelMinutes
+                const travelTime = minutesToHHMM(travelStart)
+
+                // Create travel block first
+                const travelTask = await createTask({
+                    day,
+                    title: `Travel to ${t.title}`,
+                    time: travelTime,
+                    duration: travelMinutes,
+                    category: t.category,     // keep same category OR set to "Personal"
+                    location: resolvedLoc,
+                    is_travel: true,
+                    travel_minutes: travelMinutes,
+                })
+
+                // Create the actual event
+                const eventTask = await createTask({
+                    day,
+                    title: t.title,
+                    time: t.time,
+                    duration: t.duration,
+                    category: t.category,
+                    location: resolvedLoc,
+                    is_travel: false,
+                    travel_minutes: null,
+                })
+
+                setTasks(prev => [...prev, travelTask, eventTask])
             }
+
 
             setAiText("")
         } catch (e) {
@@ -206,6 +450,10 @@ export default function DayView() {
     const hours = Array.from({ length: endHour - startHour + 1 }, (_, i) => i + startHour)
     const taskColors = ['#2563eb', '#7c3aed', '#0891b2', '#16a34a', '#f97316', '#facc15']
     const getTaskColor = (task: Task) => {
+        if (task.is_travel) {
+            return { bg: "#0f172a", border: "#38bdf8" } // travel color
+        }
+
         if (task.completed) {
             return { bg: '#27272a', border: '#3f3f46' }
         }
@@ -355,6 +603,12 @@ export default function DayView() {
                                                     <span style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '999px', backgroundColor: '#0f172a', color: '#e5e7eb', fontWeight: 600 }}>
                                                         {task.duration}m
                                                     </span>
+                                                    {task.location && (
+                                                    <span style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '6px', backgroundColor: '#3f3f46', color: '#d4d4d8' }}>
+                                                        {task.location}
+                                                    </span>
+                                                    )}
+
                                                 </div>
                                             </div>
                                         </div>
@@ -382,6 +636,21 @@ export default function DayView() {
                             color: "white",
                         }}
                         />
+                        <select
+                            value={travelMode}
+                            onChange={(e) => setTravelMode(e.target.value as TravelMode)}
+                            style={{
+                            padding: "10px 10px",
+                            borderRadius: 10,
+                            border: "1px solid #3f3f46",
+                            background: "#27272a",
+                            color: "white",
+                            }}
+                        >
+                        {travelModeOptions.map(o => (
+                        <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                    </select>
                         <button
                         onClick={runAiCommand}
                         disabled={aiLoading}
@@ -455,6 +724,12 @@ export default function DayView() {
                                         <span style={{ fontSize: '12px', backgroundColor: '#0f172a', color: '#e5e7eb', padding: '4px 8px', borderRadius: '6px', fontWeight: '500' }}>
                                             {task.duration}m
                                         </span>
+
+                                        {task.location && (
+                                        <span style={{ fontSize: '12px', backgroundColor: '#27272a', color: '#e5e7eb', padding: '4px 8px', borderRadius: '6px' }}>
+                                            {task.location}
+                                        </span>
+                                        )}
                                     </div>
                                 </div>
 
@@ -494,7 +769,58 @@ export default function DayView() {
                                     onChange={(e) => setTaskName(e.target.value)}
                                 />
                             </div>
-                            
+                            <div>
+                                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#a1a1aa', marginBottom: '4px' }}>
+                                    Location (optional)
+                                </label>
+                                <input
+                                    type="text"
+                                    style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff', outline: 'none' }}
+                                    placeholder='e.g. "McGill gym" or "200 Sherbrooke St W"'
+                                    value={taskLocation}
+                                    onChange={(e) => setTaskLocation(e.target.value)}
+                                />
+                            </div>
+                            <div style={{ marginTop: '12px' }}>
+                                <label
+                                    style={{
+                                    display: 'block',
+                                    fontSize: '12px',
+                                    fontWeight: 'bold',
+                                    textTransform: 'uppercase',
+                                    color: '#a1a1aa',
+                                    marginBottom: '4px',
+                                    }}
+                                >
+                                    Travel mode
+                                </label>
+
+                                <select
+                                    value={travelMode}
+                                    onChange={(e) =>
+                                    setTravelMode(
+                                        e.target.value as "DRIVE" | "WALK" | "BICYCLE" | "TRANSIT"
+                                    )
+                                    }
+                                    style={{
+                                    width: '100%',
+                                    padding: '12px',
+                                    borderRadius: '8px',
+                                    border: '1px solid #3f3f46',
+                                    backgroundColor: '#27272a',
+                                    color: '#fff',
+                                    outline: 'none',
+                                    height: '48px',
+                                    }}
+                                >
+                                    <option value="DRIVE">Car</option>
+                                    <option value="WALK">Walk</option>
+                                    <option value="BICYCLE">Bike</option>
+                                    <option value="TRANSIT">Public transit</option>
+                                </select>
+                            </div>
+
+
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#a1a1aa', marginBottom: '4px' }}>Time</label>
