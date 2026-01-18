@@ -6,6 +6,8 @@ import { supabase } from '../lib/supabase'
 import { getTasksForDate, saveTasksForDate } from '../lib/taskStore'
 import type { Task } from '../lib/taskStore'
 
+declare const google: any
+
 type Props = {
   userId: string
 }
@@ -53,6 +55,10 @@ export default function DayView({ userId }: Props) {
     const [taskCategory, setTaskCategory] = useState('Work')
     const [taskDuration, setTaskDuration] = useState(60)
     const [showAdd, setShowAdd] = useState(false)
+    const [taskLocation, setTaskLocation] = useState('')
+    const [taskTravelMode, setTaskTravelMode] = useState<'driving' | 'walking' | 'transit' | 'bicycling'>('driving')
+    const [travelStatus, setTravelStatus] = useState<string | null>(null)
+    const [isFetchingTravel, setIsFetchingTravel] = useState(false)
 
     // --- ACTIONS ---
     const persistTasks = async (next: Task[]) => {
@@ -75,18 +81,144 @@ export default function DayView({ userId }: Props) {
         return `${Date.now()}-${Math.random().toString(16).slice(2)}`
     }
 
+    type TravelResult = { minutes: number | null; status: string }
+
+    const loadGoogleMaps = () => {
+        if (typeof window === 'undefined') return Promise.reject(new Error('No window'))
+        if ((window as any).google?.maps) return Promise.resolve((window as any).google)
+        const existing = (window as any)._gmapsPromise
+        if (existing) return existing
+        const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
+        if (!apiKey) return Promise.reject(new Error('Missing Google Maps API key'))
+        const promise = new Promise((resolve, reject) => {
+            const script = document.createElement('script')
+            script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`
+            script.async = true
+            script.onerror = () => reject(new Error('Failed to load Google Maps JS API'))
+            script.onload = () => resolve((window as any).google)
+            document.head.appendChild(script)
+        })
+        ;(window as any)._gmapsPromise = promise
+        return promise
+    }
+
+    const geocodeAddress = async (gmaps: any, address: string) => {
+        return new Promise<string | null>((resolve) => {
+            const geocoder = new gmaps.maps.Geocoder()
+            geocoder.geocode(
+                { address, region: 'ca', componentRestrictions: { country: 'CA' } },
+                (results: any, status: string) => {
+                    if (status === 'OK' && results?.[0]?.formatted_address) {
+                        resolve(results[0].formatted_address)
+                    } else {
+                        resolve(null)
+                    }
+                }
+            )
+        })
+    }
+
+    const getDistanceMinutes = async (gmaps: any, origin: string, destination: string, mode: 'driving' | 'walking' | 'transit' | 'bicycling') => {
+        return new Promise<TravelResult>((resolve) => {
+            const service = new gmaps.maps.DistanceMatrixService()
+            service.getDistanceMatrix(
+                {
+                    origins: [origin],
+                    destinations: [destination],
+                    travelMode: gmaps.maps.TravelMode[mode.toUpperCase()],
+                    unitSystem: gmaps.maps.UnitSystem.METRIC,
+                    transitOptions: mode === 'transit' ? { departureTime: new Date() } : undefined,
+                },
+                (response: any, status: string) => {
+                    if (status !== 'OK') {
+                        resolve({ minutes: null, status: `Distance Matrix status: ${status}; task saved without travel time.` })
+                        return
+                    }
+                    const element = response?.rows?.[0]?.elements?.[0]
+                    if (!element || element.status !== 'OK' || !element.duration?.value) {
+                        resolve({ minutes: null, status: `Travel time unavailable (${element?.status || 'NO_DATA'}); task saved without it.` })
+                        return
+                    }
+                    resolve({ minutes: Math.round(element.duration.value / 60), status: 'Travel time added.' })
+                }
+            )
+        })
+    }
+
+    const fetchTravelMinutes = async (destination: string, mode: 'driving' | 'walking' | 'transit' | 'bicycling'): Promise<TravelResult> => {
+        const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY
+        const defaultOrigin = '1200-3600 Rue Mctavish Montreal QC H3A 0G3 Canada'
+        const origin = import.meta.env.VITE_DEFAULT_ORIGIN || defaultOrigin
+        if (!apiKey || !origin || !destination) {
+            return { minutes: null, status: 'Travel lookup skipped: missing origin or API key.' }
+        }
+
+        try {
+            setIsFetchingTravel(true)
+            const gmaps = await loadGoogleMaps()
+            const resolved = (await geocodeAddress(gmaps, destination)) || destination
+            return await getDistanceMinutes(gmaps, origin, resolved, mode)
+        } catch (err) {
+            console.error('Travel time lookup failed', err)
+            return { minutes: null, status: 'Travel lookup failed; task saved without travel time.' }
+        } finally {
+            setIsFetchingTravel(false)
+        }
+    }
+
     const addTask = async (e: React.FormEvent) => {
         e.preventDefault()
         if (!taskName) return
+
+        setTravelStatus(null)
+        let travelMinutes: number | null = null
+        let statusMessage: string | null = null
+
+        if (taskLocation) {
+            const hasApiKey = Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY)
+            if (!hasApiKey) {
+                statusMessage = 'Travel time not added: missing Google Maps API key.'
+            } else {
+                try {
+                    setTravelStatus('Looking up travel time...')
+                    const result = await fetchTravelMinutes(taskLocation, taskTravelMode)
+                    travelMinutes = result.minutes
+                    if (travelMinutes != null) {
+                        const confirm = window.confirm(
+                          `Found ~${travelMinutes} min travel time to "${taskLocation}". Add this on top of your planned duration?`
+                        )
+                        if (!confirm) {
+                            travelMinutes = null
+                            statusMessage = 'Travel time skipped by you; task saved.'
+                        } else {
+                            statusMessage = `Added ${travelMinutes} min travel time.`
+                        }
+                    } else {
+                        statusMessage = result.status || 'Address not found; task saved without travel time.'
+                    }
+                } catch (err) {
+                    console.error('Travel lookup error', err)
+                    statusMessage = 'Address lookup failed; task saved without travel time.'
+                    travelMinutes = null
+                } finally {
+                    setIsFetchingTravel(false)
+                }
+            }
+        }
+
         const composedTime = `${taskHour.padStart(2, '0')}:${taskMinute.padStart(2, '0')}`
+        const totalDuration = taskDuration + (travelMinutes ?? 0)
         const newTask: Task = {
             id: makeTaskId(),
             title: taskName,
             completed: false,
             time: composedTime,
-            duration: taskDuration,
+            duration: totalDuration,
             category: taskCategory,
             dateKey,
+            location: taskLocation || undefined,
+            travelMinutes: travelMinutes ?? undefined,
+            travelMode: taskTravelMode,
         }
         const updated = [...tasks, newTask]
         setTasks(updated)
@@ -95,6 +227,8 @@ export default function DayView({ userId }: Props) {
         setTaskHour('09')
         setTaskMinute('00')
         setTaskDuration(60)
+        setTaskLocation('')
+        setTravelStatus(statusMessage || 'Task added.')
         setShowAdd(false)
     }
 
@@ -394,7 +528,13 @@ export default function DayView({ userId }: Props) {
                     <div className="flex items-center justify-between mb-6">
                         <h2 className="text-xl font-bold">Tasks</h2>
                         <button
-                            onClick={() => setShowAdd(true)}
+                            onClick={() => {
+                                setTravelStatus(null)
+                                setIsFetchingTravel(false)
+                                setTaskLocation('')
+                                setTaskTravelMode('driving')
+                                setShowAdd(true)
+                            }}
                             style={{ backgroundColor: '#2563eb', color: 'white', padding: '8px', borderRadius: '8px', border: 'none', cursor: 'pointer' }}
                         >
                             <Plus size={20} />
@@ -403,6 +543,11 @@ export default function DayView({ userId }: Props) {
                     {saving && (
                         <div style={{ color: '#a5b4fc', fontSize: 12, marginBottom: 8 }}>
                             Saving to cloud...
+                        </div>
+                    )}
+                    {travelStatus && (
+                        <div style={{ color: '#a1a1aa', fontSize: 12, marginBottom: 8 }}>
+                            {travelStatus}
                         </div>
                     )}
 
@@ -440,6 +585,12 @@ export default function DayView({ userId }: Props) {
                                     }}>
                                         {task.title}
                                     </p>
+                                    {task.location && (
+                                        <span style={{ fontSize: '12px', color: '#a1a1aa' }}>
+                                            {task.location}
+                                            {task.travelMinutes ? ` • +${task.travelMinutes}m ${task.travelMode || 'travel'}` : ''}
+                                        </span>
+                                    )}
                                     <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                                         <span style={{ fontSize: '12px', backgroundColor: '#3f3f46', color: '#d4d4d8', padding: '4px 8px', borderRadius: '6px' }}>
                                             {task.time}
@@ -542,6 +693,36 @@ export default function DayView({ userId }: Props) {
                                     {durationOptions.map(d => (
                                         <option key={d} value={d}>{d}</option>
                                     ))}
+                                </select>
+                            </div>
+
+                            <div>
+                                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#a1a1aa', marginBottom: '4px' }}>Location (optional)</label>
+                                <input
+                                    type="text"
+                                    placeholder="e.g., 123 Main St or Coffee Shop"
+                                    value={taskLocation}
+                                    onChange={(e) => setTaskLocation(e.target.value)}
+                                    style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff', outline: 'none', height: '48px' }}
+                                />
+                                {isFetchingTravel && (
+                                    <div style={{ fontSize: '12px', color: '#a5b4fc', marginTop: '6px' }}>
+                                        Checking travel time...
+                                    </div>
+                                )}
+                            </div>
+
+                            <div>
+                                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#a1a1aa', marginBottom: '4px' }}>Travel mode</label>
+                                <select
+                                    value={taskTravelMode}
+                                    onChange={(e) => setTaskTravelMode(e.target.value as any)}
+                                    style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff', outline: 'none', height: '48px' }}
+                                >
+                                    <option value="driving">Driving</option>
+                                    <option value="walking">Walking</option>
+                                    <option value="transit">Transit</option>
+                                    <option value="bicycling">Bicycling</option>
                                 </select>
                             </div>
 
