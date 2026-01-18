@@ -12,7 +12,18 @@ type Props = {
 }
 
 export default function MyCalendar({ userId }: Props) {
-  const [date, setDate] = useState<Date>(new Date())
+  const [date, setDate] = useState<Date>(() => {
+    try {
+      const raw = localStorage.getItem('calendar.selectedDate')
+      if (raw) {
+        const parsed = new Date(raw)
+        if (!isNaN(parsed.getTime())) return parsed
+      }
+    } catch (err) {
+      // ignore
+    }
+    return new Date()
+  })
   const [tasks, setTasks] = useState<Task[]>([])
   const [datesWithTasks, setDatesWithTasks] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
@@ -38,6 +49,15 @@ export default function MyCalendar({ userId }: Props) {
     const pathDate = format(clickedDate, 'yyyy-MM-dd')
     navigate(`/day/${pathDate}`)
   }
+
+  // Save selected date (so returning to calendar restores the exact date/month)
+  useEffect(() => {
+    try {
+      localStorage.setItem('calendar.selectedDate', date.toISOString())
+    } catch (err) {
+      // ignore
+    }
+  }, [date])
 
   return (
     // MASTER CONTAINER: Forces White Background & Dark Text NO MATTER WHAT
@@ -152,11 +172,7 @@ export default function MyCalendar({ userId }: Props) {
           {/* Navigation Arrows */}
           <div style={{ display: 'flex', gap: '4px', marginLeft: '20px', backgroundColor: '#f3f4f6', padding: '4px', borderRadius: '8px' }}>
             <button 
-              onClick={() => setDate(prev => {
-                const next = new Date(prev)
-                next.setMonth(prev.getMonth() - 1)
-                return next
-              })}
+              onClick={() => setDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}
               style={{ padding: '6px', border: 'none', background: 'transparent', cursor: 'pointer', color: '#4b5563' }}
             >
               <ChevronLeft size={20} />
@@ -168,11 +184,7 @@ export default function MyCalendar({ userId }: Props) {
               Today
             </button>
             <button 
-              onClick={() => setDate(prev => {
-                const next = new Date(prev)
-                next.setMonth(prev.getMonth() + 1)
-                return next
-              })}
+              onClick={() => setDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}
               style={{ padding: '6px', border: 'none', background: 'transparent', cursor: 'pointer', color: '#4b5563' }}
             >
               <ChevronRight size={20} />
