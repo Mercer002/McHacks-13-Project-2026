@@ -6,6 +6,9 @@ export interface Task {
   duration: number // minutes
   category: string
   dateKey: string
+  location?: string
+  travelMinutes?: number
+  travelMode?: 'driving' | 'walking' | 'transit' | 'bicycling'
 }
 
 const STORAGE_PREFIX = 'timepilotTasks:'
