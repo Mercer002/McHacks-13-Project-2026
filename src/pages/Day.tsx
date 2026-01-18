@@ -130,7 +130,7 @@ export default function DayView() {
                             padding: '10px 14px',
                             background: '#0ea5e9',
                             color: '#0b1020',
-                            marginRight: 12,
+                            marginRight: 48,
                             borderRadius: 12,
                           }}
                         >
