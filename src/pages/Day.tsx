@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { parseISO, format } from 'date-fns'
 import { CheckCircle, Circle, Trash2, Plus, Clock, Calendar as CalIcon, X } from 'lucide-react'
@@ -45,16 +45,15 @@ export default function DayView({ userId }: Props) {
     const endHour = 23
     const pxPerMinute = 2
     const hourHeight = 60 * pxPerMinute
-    const hoursOptions = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'))
-    const minutesOptions = Array.from({ length: 60 }, (_, i) => String(i).padStart(2, '0'))
-    const durationOptions = [15, 30, 45, 60, 90, 120, 180]
-    
+    // Start time input: single HH:MM string plus simple AM/PM toggle
+    // Duration input: single HH:MM string representing hours:minutes (e.g. 02:45)
     // --- STATE ---
     const [taskName, setTaskName] = useState('')
-    const [taskHour, setTaskHour] = useState('09')
-    const [taskMinute, setTaskMinute] = useState('00')
+    const [timeInput, setTimeInput] = useState('00:00')
+    const [timePeriod, setTimePeriod] = useState<'AM' | 'PM'>('AM')
     const [taskCategory, setTaskCategory] = useState('Work')
-    const [taskDuration, setTaskDuration] = useState(60)
+    // duration stored in UI as HH:MM string; internal storage uses minutes
+    const [durationInput, setDurationInput] = useState('01:00')
     const [showAdd, setShowAdd] = useState(false)
     const [taskLocation, setTaskLocation] = useState('')
     const [taskTravelMode, setTaskTravelMode] = useState<'driving' | 'walking' | 'transit' | 'bicycling'>('driving')
@@ -67,6 +66,14 @@ export default function DayView({ userId }: Props) {
     const [aiComputedMedian, setAiComputedMedian] = useState<number | null>(null)
     const [showAiModal, setShowAiModal] = useState(false)
     const [pendingNewTask, setPendingNewTask] = useState<Task | null>(null)
+    const [pendingAddressTask, setPendingAddressTask] = useState<Task | null>(null)
+    const [showAddressModal, setShowAddressModal] = useState(false)
+    const [addressLookupStatus, setAddressLookupStatus] = useState<string | null>(null)
+    const [addressLookupMinutes, setAddressLookupMinutes] = useState<number | null>(null)
+    const [showMapModal, setShowMapModal] = useState(false)
+    const [mapSelectedPos, setMapSelectedPos] = useState<{ lat: number; lng: number } | null>(null)
+    const [mapSelectedAddress, setMapSelectedAddress] = useState<string | null>(null)
+    const [mapLoading, setMapLoading] = useState(false)
     // loading state intentionally omitted from UI for now
 
     // --- ACTIONS ---
@@ -182,59 +189,185 @@ export default function DayView({ userId }: Props) {
         }
     }
 
+    // --- Helpers for HH:MM parsing/formatting ---
+    const parseHHMMToMinutes = (s: string | undefined): number | null => {
+        if (!s) return null
+        const parts = s.split(':')
+        if (parts.length !== 2) return null
+        const hh = parseInt(parts[0], 10)
+        const mm = parseInt(parts[1], 10)
+        if (isNaN(hh) || isNaN(mm)) return null
+        return hh * 60 + mm
+    }
+
+    const formatMinutesToHHMM = (mins: number) => {
+        const h = Math.floor(mins / 60)
+        const m = mins % 60
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+    }
+
+    const humanizeMinutes = (mins: number | null | undefined) => {
+        if (mins == null) return 'unknown'
+        const h = Math.floor(mins / 60)
+        const m = mins % 60
+        if (h > 0 && m > 0) return `${h} hour${h !== 1 ? 's' : ''} and ${m} minute${m !== 1 ? 's' : ''}`
+        if (h > 0) return `${h} hour${h !== 1 ? 's' : ''}`
+        return `${m} minute${m !== 1 ? 's' : ''}`
+    }
+
+    const adjustHHMMByMinutes = (s: string | undefined, delta: number) => {
+        const mins = parseHHMMToMinutes(s) ?? 0
+        const next = Math.max(0, mins + delta)
+        // format back to HH:MM
+        const h = Math.floor(next / 60)
+        const m = next % 60
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+    }
+
+    // --- Map modal: initialize Google Map and allow clicking to pick an address ---
+    // When `showMapModal` becomes true we create a map in #task-map and attach a click listener.
+    // Clicking sets `mapSelectedPos` and reverse-geocodes to `mapSelectedAddress`.
+    useEffect(() => {
+        if (!showMapModal) return
+        let map: any = null
+        let marker: any = null
+        let geocoder: any = null
+        let listener: any = null
+
+        const setup = async () => {
+            setMapLoading(true)
+            try {
+                const gmaps = await loadGoogleMaps()
+                const el = document.getElementById('task-map')
+                if (!el) return
+                geocoder = new gmaps.maps.Geocoder()
+                // center on default origin (or user's current position when available)
+                const defaultOrigin = import.meta.env.VITE_DEFAULT_ORIGIN || ''
+                let center = { lat: 45.504, lng: -73.578 }
+                if (defaultOrigin) {
+                    try {
+                        const res = await new Promise<any>((resolve) => geocoder.geocode({ address: defaultOrigin }, (r: any) => resolve(r)))
+                        if (res?.results?.[0]?.geometry?.location) {
+                            const loc = res.results[0].geometry.location
+                            center = { lat: loc.lat(), lng: loc.lng() }
+                        }
+                    } catch (e) {
+                        // ignore
+                    }
+                } else if (navigator.geolocation) {
+                    try {
+                        const p = await new Promise<GeolocationPosition>((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { timeout: 3000 }))
+                        center = { lat: p.coords.latitude, lng: p.coords.longitude }
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+
+                map = new gmaps.maps.Map(el, { center, zoom: 13 })
+                marker = new gmaps.maps.Marker({ map })
+
+                // if there's an existing typed location, try to geocode and place marker
+                if (taskLocation) {
+                    geocoder.geocode({ address: taskLocation }, (results: any, status: string) => {
+                        if (status === 'OK' && results?.[0]?.geometry?.location) {
+                            const loc = results[0].geometry.location
+                            const latlng = { lat: loc.lat(), lng: loc.lng() }
+                            marker.setPosition(latlng)
+                            map.setCenter(latlng)
+                            setMapSelectedPos(latlng)
+                            setMapSelectedAddress(results[0].formatted_address || taskLocation)
+                        }
+                    })
+                }
+
+                listener = map.addListener('click', (e: any) => {
+                    const latLng = e.latLng
+                    const lat = latLng.lat()
+                    const lng = latLng.lng()
+                    marker.setPosition({ lat, lng })
+                    setMapSelectedPos({ lat, lng })
+                    geocoder.geocode({ location: { lat, lng } }, (results: any, status: string) => {
+                        if (status === 'OK' && results?.[0]?.formatted_address) {
+                            setMapSelectedAddress(results[0].formatted_address)
+                        } else {
+                            setMapSelectedAddress(`${lat.toFixed(5)}, ${lng.toFixed(5)}`)
+                        }
+                    })
+                })
+            } catch (err) {
+                console.warn('Map setup failed', err)
+            } finally {
+                setMapLoading(false)
+            }
+        }
+
+        setup()
+
+        return () => {
+            try {
+                if (listener && (window as any).google?.maps && map) (window as any).google.maps.event.removeListener(listener)
+            } catch (e) {
+                // ignore
+            }
+        }
+    }, [showMapModal])
+
     const persistNewTask = async (t: Task) => {
         const updated = [...tasks, t]
         setTasks(updated)
         await persistTasks(updated)
         setTaskName('')
-        setTaskHour('09')
-        setTaskMinute('00')
-        setTaskDuration(60)
+        setTimeInput('00:00')
+        setTimePeriod('AM')
+        setDurationInput('01:00')
         setShowAdd(false)
     }
 
-    const addTask = async (e: React.FormEvent) => {
+    const addTask = async (e: FormEvent) => {
         e.preventDefault()
         if (!taskName) return
-
+        // reset any previous address/modal state
         setTravelStatus(null)
-        let travelMinutes: number | null = null
-        let statusMessage: string | null = null
+        setAddressLookupStatus(null)
 
-        if (taskLocation) {
-            const hasApiKey = Boolean(import.meta.env.VITE_GOOGLE_MAPS_API_KEY)
-            if (!hasApiKey) {
-                statusMessage = 'Travel time not added: missing Google Maps API key.'
+        // Compose time from single HH:MM input + AM/PM toggle -> convert to 24-hour HH:MM
+
+        const timeRaw = (timeInput || '00:00').trim()
+        let [rawH, rawM] = timeRaw.split(':')
+        rawH = rawH ?? '0'
+        rawM = rawM ?? '0'
+        let hh = parseInt(rawH, 10)
+        if (isNaN(hh)) hh = 0
+        let mm = parseInt(rawM, 10)
+        if (isNaN(mm)) mm = 0
+        // clamp
+        if (mm < 0) mm = 0
+        if (mm > 59) mm = 59
+
+        // If user provided a 12-hour style hour (1-12), apply AM/PM toggle
+        if (hh >= 1 && hh <= 12) {
+            if (timePeriod === 'AM') {
+                if (hh === 12) hh = 0
             } else {
-                try {
-                    setTravelStatus('Looking up travel time...')
-                    const result = await fetchTravelMinutes(taskLocation, taskTravelMode)
-                    travelMinutes = result.minutes
-                    if (travelMinutes != null) {
-                        const confirm = window.confirm(
-                          `Found ~${travelMinutes} min travel time to "${taskLocation}". Add this on top of your planned duration?`
-                        )
-                        if (!confirm) {
-                            travelMinutes = null
-                            statusMessage = 'Travel time skipped by you; task saved.'
-                        } else {
-                            statusMessage = `Added ${travelMinutes} min travel time.`
-                        }
-                    } else {
-                        statusMessage = result.status || 'Address not found; task saved without travel time.'
-                    }
-                } catch (err) {
-                    console.error('Travel lookup error', err)
-                    statusMessage = 'Address lookup failed; task saved without travel time.'
-                    travelMinutes = null
-                } finally {
-                    setIsFetchingTravel(false)
-                }
+                if (hh !== 12) hh = hh + 12
             }
         }
+        const hhStr = String(hh).padStart(2, '0')
+        const mmStr = String(mm).padStart(2, '0')
+        const composedTime = `${hhStr}:${mmStr}`
 
-        const composedTime = `${taskHour.padStart(2, '0')}:${taskMinute.padStart(2, '0')}`
-        const totalDuration = taskDuration + (travelMinutes ?? 0)
+        // Parse durationInput (HH:MM) -> total minutes
+        const parseDurationInput = (s: string | undefined) => {
+            if (!s) return 0
+            const parts = s.split(':')
+            if (parts.length !== 2) return 0
+            const dh = parseInt(parts[0], 10)
+            const dm = parseInt(parts[1], 10)
+            if (isNaN(dh) || isNaN(dm)) return 0
+            return Math.max(1, dh * 60 + Math.max(0, Math.min(59, dm)))
+        }
+
+        const totalDuration = parseDurationInput(durationInput)
         const newTask: Task = {
             id: makeTaskId(),
             title: taskName,
@@ -244,13 +377,18 @@ export default function DayView({ userId }: Props) {
             category: taskCategory,
             dateKey,
             location: taskLocation || undefined,
-            travelMinutes: travelMinutes ?? undefined,
+            travelMinutes: undefined,
             travelMode: taskTravelMode,
         }
 
-        setTravelStatus(statusMessage || 'Task added.')
+        // If user provided a location, open our styled address modal to avoid any blank popups
+        if (taskLocation) {
+            setPendingAddressTask(newTask)
+            setShowAddressModal(true)
+            return
+        }
 
-        // Call AI to analyze the estimate but do not block creation.
+        // No location: proceed with AI analysis / persist
         try {
             const result = await analyzeEstimate(userId, newTask.title, newTask.duration)
             if (result && result.message) {
@@ -267,7 +405,6 @@ export default function DayView({ userId }: Props) {
             console.warn('AI analysis failed', err)
         }
 
-        // No suggestion — persist immediately
         await persistNewTask(newTask)
     }
 
@@ -296,6 +433,78 @@ export default function DayView({ userId }: Props) {
         setAiComputedMedian(null)
     }
 
+    // Address modal handlers
+    const performAddressLookup = async () => {
+        if (!pendingAddressTask) return
+        try {
+            setAddressLookupStatus('Looking up travel time...')
+            const res = await fetchTravelMinutes(taskLocation, taskTravelMode)
+            if (res.minutes != null) {
+                setAddressLookupMinutes(res.minutes)
+                setAddressLookupStatus(`Found ~${res.minutes} minutes`)
+            } else {
+                setAddressLookupMinutes(null)
+                setAddressLookupStatus(res.status || 'No travel time available')
+            }
+        } catch (err) {
+            console.warn('Address lookup failed', err)
+            setAddressLookupStatus('Lookup failed')
+            setAddressLookupMinutes(null)
+        }
+    }
+
+    const addressAddWithTravel = async () => {
+        if (!pendingAddressTask) return
+        const minutes = addressLookupMinutes ?? 0
+        const updated: Task = { ...pendingAddressTask, duration: pendingAddressTask.duration + minutes, travelMinutes: minutes }
+        setShowAddressModal(false)
+        setPendingAddressTask(null)
+
+        // Run AI analysis flow (same as when creating a task normally)
+        try {
+            const result = await analyzeEstimate(userId, updated.title, updated.duration)
+            if (result && result.message) {
+                setAiSuggestion(result.message)
+                setAiSuggestedDuration(result.suggestedDuration ?? null)
+                setAiFamily((result as any).family ?? null)
+                setAiSampleSize((result as any).sampleSize ?? null)
+                setAiComputedMedian((result as any).computedMedian ?? null)
+                setPendingNewTask(updated)
+                setShowAiModal(true)
+                return
+            }
+        } catch (err) {
+            console.warn('AI analysis failed', err)
+        }
+
+        await persistNewTask(updated)
+    }
+
+    const addressSaveWithoutTravel = async () => {
+        if (!pendingAddressTask) return
+        const updated = { ...pendingAddressTask }
+        setShowAddressModal(false)
+        setPendingAddressTask(null)
+
+        try {
+            const result = await analyzeEstimate(userId, updated.title, updated.duration)
+            if (result && result.message) {
+                setAiSuggestion(result.message)
+                setAiSuggestedDuration(result.suggestedDuration ?? null)
+                setAiFamily((result as any).family ?? null)
+                setAiSampleSize((result as any).sampleSize ?? null)
+                setAiComputedMedian((result as any).computedMedian ?? null)
+                setPendingNewTask(updated)
+                setShowAiModal(true)
+                return
+            }
+        } catch (err) {
+            console.warn('AI analysis failed', err)
+        }
+
+        await persistNewTask(updated)
+    }
+
     const toggleTask = async (id: string) => {
         const updated = tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t)
         setTasks(updated)
@@ -311,8 +520,8 @@ export default function DayView({ userId }: Props) {
 
     const openCompleteModal = (task: Task) => {
         setModalTask(task)
-        // Prefill with the estimated duration, but keep as string so user can clear it
-        setActualDuration(String(task.duration ?? 0))
+        // Prefill with the estimated duration as HH:MM string so user can edit it
+        setActualDuration(formatMinutesToHHMM(task.duration ?? 0))
         setCompletionError(null)
         setShowCompleteModal(true)
     }
@@ -326,10 +535,10 @@ export default function DayView({ userId }: Props) {
     const confirmComplete = async () => {
         if (!modalTask) return
 
-        // validate actualDuration is a positive integer
-        const parsed = parseInt(actualDuration, 10)
+        // parse actualDuration HH:MM -> minutes
+        const parsed = parseHHMMToMinutes(actualDuration) ?? NaN
         if (isNaN(parsed) || parsed <= 0) {
-            setCompletionError('Please enter a positive number of minutes')
+            setCompletionError('Please enter a positive duration in HH:MM')
             return
         }
 
@@ -708,29 +917,59 @@ export default function DayView({ userId }: Props) {
                             <div className="grid grid-cols-2 gap-4">
                                 <div>
                                     <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#a1a1aa', marginBottom: '4px' }}>Time</label>
-                                    <div style={{ display: 'flex', gap: '8px' }}>
-                                        <select
-                                            style={{ width: '50%', padding: '12px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff', outline: 'none', height: '48px' }}
-                                            value={taskHour}
+                                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                        <input
+                                            type="text"
+                                            inputMode="numeric"
+                                            pattern="[0-9:]*"
+                                            value={timeInput}
                                             onChange={(e) => {
-                                                setTaskHour(e.target.value)
+                                                // allow editing to an empty string so user can fully backspace
+                                                let raw = e.target.value.replace(/[^0-9:]/g, '').slice(0,5)
+                                                if (raw === '') {
+                                                    setTimeInput('')
+                                                    return
+                                                }
+                                                // if user types contiguous digits like 0930 -> auto-insert colon when length >=3
+                                                if (!raw.includes(':') && raw.length > 2) raw = raw.slice(0,2) + ':' + raw.slice(2)
+                                                setTimeInput(raw)
                                             }}
-                                        >
-                                            {hoursOptions.map(h => (
-                                                <option key={h} value={h}>{h}</option>
-                                            ))}
-                                        </select>
-                                        <select
-                                            style={{ width: '50%', padding: '12px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff', outline: 'none', height: '48px' }}
-                                            value={taskMinute}
-                                            onChange={(e) => {
-                                                setTaskMinute(e.target.value)
+                                            onBlur={() => {
+                                                // Normalize on blur: ensure HH:MM, clamp minutes to 0-59, clamp hours to 1-11 for 12-hour clock, default to 00:00 when empty
+                                                const raw = (timeInput || '').trim()
+                                                if (!raw) {
+                                                    setTimeInput('00:00')
+                                                    return
+                                                }
+                                                let parts = raw.split(':')
+                                                if (parts.length === 1) {
+                                                    // only hours entered
+                                                    let hhN = Number(parts[0] || 0)
+                                                    if (isNaN(hhN)) hhN = 0
+                                                    // clamp to 1..11 (12-hour clock up to 11:59 as requested)
+                                                    hhN = Math.max(1, Math.min(11, hhN || 1))
+                                                    const hh = String(hhN).padStart(2, '0')
+                                                    setTimeInput(`${hh}:00`)
+                                                    return
+                                                }
+                                                let hh = parts[0] || '0'
+                                                let mm = parts[1] || '0'
+                                                let hhN = Number(hh || 0)
+                                                if (isNaN(hhN)) hhN = 0
+                                                hhN = Math.max(1, Math.min(11, hhN || 1))
+                                                hh = String(hhN).padStart(2, '0')
+                                                let mmN = parseInt(mm, 10)
+                                                if (isNaN(mmN) || mmN < 0) mmN = 0
+                                                if (mmN > 59) mmN = 59
+                                                mm = String(mmN).padStart(2, '0')
+                                                setTimeInput(`${hh}:${mm}`)
                                             }}
-                                        >
-                                            {minutesOptions.map(m => (
-                                                <option key={m} value={m}>{m}</option>
-                                            ))}
-                                        </select>
+                                            placeholder="00:00"
+                                            style={{ width: '72px', padding: '8px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff', outline: 'none', height: '40px', textAlign: 'center', fontSize: '14px' }}
+                                        />
+                                        <div style={{ marginLeft: 8 }}>
+                                            <button type="button" onClick={() => setTimePeriod(prev => prev === 'AM' ? 'PM' : 'AM')} style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #3f3f46', background: '#111827', color: '#a1a1aa', cursor: 'pointer' }}>{timePeriod}</button>
+                                        </div>
                                     </div>
                                 </div>
                                 <div>
@@ -748,27 +987,68 @@ export default function DayView({ userId }: Props) {
                             </div>
                             
                             <div>
-                                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#a1a1aa', marginBottom: '4px' }}>Duration (minutes)</label>
-                                <select
-                                    style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff', outline: 'none', height: '48px' }}
-                                    value={taskDuration}
-                                    onChange={(e) => setTaskDuration(Number(e.target.value))}
-                                >
-                                    {durationOptions.map(d => (
-                                        <option key={d} value={d}>{d}</option>
-                                    ))}
-                                </select>
+                                <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#a1a1aa', marginBottom: '4px' }}>Duration (HH:MM)</label>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <input
+                                        type="text"
+                                        inputMode="numeric"
+                                        pattern="[0-9:]*"
+                                        value={durationInput}
+                                        onChange={(e) => {
+                                            let raw = e.target.value.replace(/[^0-9:]/g, '').slice(0,5)
+                                            if (raw === '') {
+                                                setDurationInput('')
+                                                return
+                                            }
+                                            if (!raw.includes(':') && raw.length > 2) raw = raw.slice(0,2) + ':' + raw.slice(2)
+                                            setDurationInput(raw)
+                                        }}
+                                        onBlur={() => {
+                                            const raw = (durationInput || '').trim()
+                                            if (!raw) {
+                                                setDurationInput('00:00')
+                                                return
+                                            }
+                                            let parts = raw.split(':')
+                                            if (parts.length === 1) {
+                                                const hh = String(Math.max(0, Number(parts[0] || 0))).padStart(2, '0')
+                                                setDurationInput(`${hh}:00`)
+                                                return
+                                            }
+                                            let dh = Number(parts[0] || 0)
+                                            let dm = parseInt(parts[1] || '0', 10)
+                                            if (isNaN(dh) || dh < 0) dh = 0
+                                            if (isNaN(dm) || dm < 0) dm = 0
+                                            // normalize overflow minutes into hours
+                                            dh += Math.floor(dm / 60)
+                                            dm = dm % 60
+                                            setDurationInput(`${String(dh).padStart(2, '0')}:${String(dm).padStart(2, '0')}`)
+                                        }}
+                                        placeholder="02:30"
+                                        style={{ width: '72px', padding: '8px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff', outline: 'none', height: '40px', textAlign: 'center', fontSize: '14px' }}
+                                    />
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                        <button type="button" onClick={() => setDurationInput(prev => adjustHHMMByMinutes(prev, 1))} style={{ padding: '4px 6px', borderRadius: 6, border: '1px solid #3f3f46', background: '#111827', color: '#fff', cursor: 'pointer' }}>▲</button>
+                                        <button type="button" onClick={() => setDurationInput(prev => adjustHHMMByMinutes(prev, -1))} style={{ padding: '4px 6px', borderRadius: 6, border: '1px solid #3f3f46', background: '#111827', color: '#fff', cursor: 'pointer' }}>▼</button>
+                                    </div>
+                                </div>
                             </div>
 
                             <div>
                                 <label style={{ display: 'block', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase', color: '#a1a1aa', marginBottom: '4px' }}>Location (optional)</label>
-                                <input
-                                    type="text"
-                                    placeholder="e.g., 123 Main St or Coffee Shop"
-                                    value={taskLocation}
-                                    onChange={(e) => setTaskLocation(e.target.value)}
-                                    style={{ width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff', outline: 'none', height: '48px' }}
-                                />
+                                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                                    <input
+                                        type="text"
+                                        placeholder="e.g., 123 Main St or Coffee Shop"
+                                        value={taskLocation}
+                                        onChange={(e) => setTaskLocation(e.target.value)}
+                                        style={{ flex: 1, padding: '12px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff', outline: 'none', height: '48px' }}
+                                    />
+                                    <button type="button" onClick={() => { setShowMapModal(true); setMapSelectedAddress(null); setMapSelectedPos(null) }} title="Pick on map" style={{ padding: '10px', borderRadius: 8, border: '1px solid #3f3f46', background: '#111827', color: '#fff', cursor: 'pointer' }}>
+                                        {/* simple inline map pin SVG */}
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 10c0 6-9 13-9 13S3 16 3 10a9 9 0 0118 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                                    </button>
+                                </div>
                                 {isFetchingTravel && (
                                     <div style={{ fontSize: '12px', color: '#a5b4fc', marginTop: '6px' }}>
                                         Checking travel time...
@@ -798,6 +1078,67 @@ export default function DayView({ userId }: Props) {
                 </div>
             )}
 
+            {/* Address Confirmation / Lookup Modal */}
+            {showAddressModal && pendingAddressTask && (
+                <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 75 }}>
+                    <div style={{ backgroundColor: '#0b1222', borderRadius: '12px', padding: '18px', width: '100%', maxWidth: '520px', border: '1px solid #213547', color: '#e6eef8' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                            <h3 style={{ margin: 0, fontSize: 18 }}>Address entered</h3>
+                            <button onClick={() => { setShowAddressModal(false); setPendingAddressTask(null); setAddressLookupStatus(null); setAddressLookupMinutes(null); }} style={{ color: '#a1a1aa', background: 'none', border: 'none', cursor: 'pointer' }}>
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <p style={{ color: '#cbd5e1', marginTop: 0 }}>Address: <strong style={{ color: '#e6eef8' }}>{taskLocation}</strong></p>
+                        {addressLookupStatus && (
+                            <div style={{ marginTop: 8, color: '#9fb4d6', fontSize: 13 }}>{addressLookupStatus}</div>
+                        )}
+
+                        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                            <button onClick={performAddressLookup} style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}>Lookup travel</button>
+                            <button onClick={addressSaveWithoutTravel} style={{ background: '#374151', color: '#fff', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: 'pointer' }}>Save</button>
+                            <button onClick={() => { setShowAddressModal(false); setPendingAddressTask(null); setAddressLookupStatus(null); setAddressLookupMinutes(null); }} style={{ background: '#6b7280', color: '#fff', border: 'none', padding: '8px 10px', borderRadius: 8 }}>Cancel</button>
+                        </div>
+
+                        {addressLookupMinutes != null && (
+                            <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                                <button onClick={addressAddWithTravel} style={{ flex: 1, background: '#10b981', color: '#021012', border: 'none', padding: '10px', borderRadius: 8 }}>Add ~{addressLookupMinutes}m</button>
+                                <button onClick={addressSaveWithoutTravel} style={{ flex: 1, background: '#374151', color: '#fff', border: 'none', padding: '10px', borderRadius: 8 }}>Skip</button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {/* Map picker modal */}
+            {showMapModal && (
+                <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 120 }}>
+                    <div style={{ backgroundColor: '#0b1222', borderRadius: '12px', padding: '18px', width: '100%', maxWidth: '820px', border: '1px solid #213547', color: '#e6eef8' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                            <h3 style={{ margin: 0, fontSize: 18 }}>Pick a location</h3>
+                            <button onClick={() => setShowMapModal(false)} style={{ color: '#a1a1aa', background: 'none', border: 'none', cursor: 'pointer' }}>
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <div id="task-map" style={{ width: '100%', height: '420px', borderRadius: 8, overflow: 'hidden', border: '1px solid #213547' }} />
+
+                        <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
+                            <div style={{ flex: 1 }}>
+                                <div style={{ color: '#9fb4d6', fontSize: 13 }}>{mapSelectedAddress ?? (mapLoading ? 'Loading map...' : 'Click on the map to pick a location')}</div>
+                            </div>
+                            <div style={{ display: 'flex', gap: 8 }}>
+                                <button onClick={() => {
+                                    if (mapSelectedAddress) setTaskLocation(mapSelectedAddress)
+                                    setShowMapModal(false)
+                                }} disabled={!mapSelectedAddress} style={{ background: mapSelectedAddress ? '#10b981' : '#374151', color: mapSelectedAddress ? '#021012' : '#9ca3af', border: 'none', padding: '8px 10px', borderRadius: 8, cursor: mapSelectedAddress ? 'pointer' : 'not-allowed' }}>Confirm</button>
+                                <button onClick={() => setShowMapModal(false)} style={{ background: '#6b7280', color: '#fff', border: 'none', padding: '8px 10px', borderRadius: 8 }}>Cancel</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* AI Suggestion Modal */}
             {showAiModal && aiSuggestion && (
                 <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 70 }}>
@@ -815,7 +1156,7 @@ export default function DayView({ userId }: Props) {
                         )}
                         <p style={{ color: '#cbd5e1', marginTop: aiFamily ? 8 : 0 }}>{aiSuggestion}</p>
                         {aiSuggestedDuration && (
-                            <p style={{ color: '#9ae6b4', fontWeight: 700 }}>Suggested duration: {aiSuggestedDuration} minutes</p>
+                            <p style={{ color: '#9ae6b4', fontWeight: 700 }}>Suggested duration: {humanizeMinutes(aiSuggestedDuration)}</p>
                         )}
                         <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
                             <button onClick={acceptAiSuggestion} style={{ flex: 1, background: '#10b981', border: 'none', padding: '10px', borderRadius: 8, color: '#021012', fontWeight: 700 }}>Accept suggestion</button>
@@ -839,14 +1180,49 @@ export default function DayView({ userId }: Props) {
                         <p style={{ color: '#94a3b8', marginBottom: 12 }}>{modalTask.title} — {modalTask.category}</p>
 
                         <div style={{ marginBottom: 12 }}>
-                            <label style={{ display: 'block', fontSize: '12px', fontWeight: '700', color: '#a1a1aa', marginBottom: 6 }}>Actual duration (minutes)</label>
-                            <input
-                                type="number"
-                                value={actualDuration}
-                                onChange={(e) => setActualDuration(e.target.value)}
-                                step={5}
-                                style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff' }}
-                            />
+                            <label style={{ display: 'block', fontSize: '12px', fontWeight: '700', color: '#a1a1aa', marginBottom: 6 }}>Actual duration (HH:MM)</label>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    pattern="[0-9:]*"
+                                    value={actualDuration}
+                                    onChange={(e) => {
+                                        let raw = e.target.value.replace(/[^0-9:]/g, '').slice(0,5)
+                                        if (raw === '') {
+                                            setActualDuration('')
+                                            return
+                                        }
+                                        if (!raw.includes(':') && raw.length > 2) raw = raw.slice(0,2) + ':' + raw.slice(2)
+                                        setActualDuration(raw)
+                                    }}
+                                    onBlur={() => {
+                                        const raw = (actualDuration || '').trim()
+                                        if (!raw) {
+                                            setActualDuration(formatMinutesToHHMM(0))
+                                            return
+                                        }
+                                        let parts = raw.split(':')
+                                        if (parts.length === 1) {
+                                            const hh = String(Math.max(0, Number(parts[0] || 0))).padStart(2, '0')
+                                            setActualDuration(`${hh}:00`)
+                                            return
+                                        }
+                                        let dh = Number(parts[0] || 0)
+                                        let dm = parseInt(parts[1] || '0', 10)
+                                        if (isNaN(dh) || dh < 0) dh = 0
+                                        if (isNaN(dm) || dm < 0) dm = 0
+                                        dh += Math.floor(dm / 60)
+                                        dm = dm % 60
+                                        setActualDuration(`${String(dh).padStart(2, '0')}:${String(dm).padStart(2, '0')}`)
+                                    }}
+                                    style={{ width: '72px', padding: '8px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff', outline: 'none', height: '40px', textAlign: 'center', fontSize: '14px' }}
+                                />
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                    <button type="button" onClick={() => setActualDuration(prev => adjustHHMMByMinutes(prev, 1))} style={{ padding: '4px 6px', borderRadius: 6, border: '1px solid #3f3f46', background: '#111827', color: '#fff', cursor: 'pointer' }}>▲</button>
+                                    <button type="button" onClick={() => setActualDuration(prev => adjustHHMMByMinutes(prev, -1))} style={{ padding: '4px 6px', borderRadius: 6, border: '1px solid #3f3f46', background: '#111827', color: '#fff', cursor: 'pointer' }}>▼</button>
+                                </div>
+                            </div>
                         </div>
 
                         {completionError && <p style={{ color: '#f87171', marginBottom: 8 }}>{completionError}</p>}

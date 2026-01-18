@@ -75,6 +75,28 @@ function weightedMedian(values: number[], weights: number[]) {
   return pairs[pairs.length - 1].v
 }
 
+function formatMinutesToHoursMinutes(mins: number) {
+  if (mins == null || isNaN(mins)) return '0 minutes'
+  const m = Math.round(mins)
+  const hours = Math.floor(m / 60)
+  const minutes = m % 60
+  const parts: string[] = []
+  if (hours > 0) parts.push(hours === 1 ? `${hours} hour` : `${hours} hours`)
+  if (minutes > 0) parts.push(minutes === 1 ? `${minutes} minute` : `${minutes} minutes`)
+  if (parts.length === 0) return '0 minutes'
+  if (parts.length === 1) return parts[0]
+  return `${parts[0]} and ${parts[1]}`
+}
+
+function replaceMinutesWithHoursText(text: string) {
+  if (!text) return text
+  return text.replace(/(\d{1,5})\s*(minutes|minute|mins|min|m)\b/gi, (_m, p1) => {
+    const n = Number(p1)
+    if (isNaN(n)) return _m
+    return formatMinutesToHoursMinutes(n)
+  })
+}
+
 function recencyWeight(createdAt?: string | null, lambda = 0.06) {
   // simple exponential decay weight based on days since the event
   if (!createdAt) return 1
@@ -219,14 +241,14 @@ export async function analyzeEstimate(userId: string, title: string, estimatedMi
   // Only suggest when suggested is meaningfully larger than the user's estimate
   if (suggested > estimatedMinutes + Math.max(5, Math.round(estimatedMinutes * 0.2))) {
     const examples = top.map(t => `Title: ${t.p.title} — estimated ${t.p.estimated_time}m, actual ${t.p.actual_time}m`).join('\n')
-    const prompt = `You are an assistant that helps users estimate task durations. The user proposes a new task:\nTitle: ${title}\nEstimated duration: ${estimatedMinutes} minutes\n\nHere are similar past tasks and their durations:\n${examples}\n\nBased on the examples, give a short, friendly suggestion if the user's estimate seems low and optionally suggest a more realistic duration in minutes. Keep the message concise and non-judgmental.\n\nIMPORTANT: When giving a suggestion, include a human-facing sentence that provides context using this style when appropriate: \"When you did this, it typically took about X minutes (you estimated Y minutes).\" Example: \"When you did this it typically took about 45 minutes — you estimated 20 minutes. Consider increasing your estimate.\" If you provide a numeric suggestion, include that sentence or a close variant.`
+    const prompt = `You are an assistant that helps users estimate task durations. The user proposes a new task:\nTitle: ${title}\nEstimated duration: ${estimatedMinutes} minutes\n\nHere are similar past tasks and their durations:\n${examples}\n\nBased on the examples, give a short, friendly suggestion if the user's estimate seems low and optionally suggest a more realistic duration in minutes. Keep the message concise and non-judgmental.\n\nIMPORTANT: When giving a suggestion, include a human-facing sentence that provides context using this style when appropriate: "When you did this, it typically took about X minutes (you estimated Y minutes)." Example: "When you did this it typically took about 45 minutes — you estimated 20 minutes. Consider increasing your estimate." If you provide a numeric suggestion, include that sentence or a close variant.`
     const suggestion = await callGemini(prompt)
     if (!suggestion) {
-      return { message: `When you did this it typically took about ${suggested} minutes (you estimated ${estimatedMinutes}). Consider increasing your estimate.`, suggestedDuration: suggested, family: null, sampleSize: filteredWithMeta.length, computedMedian: suggested }
+      return { message: `When you did this it typically took about ${formatMinutesToHoursMinutes(suggested)} (you estimated ${formatMinutesToHoursMinutes(estimatedMinutes)}). Consider increasing your estimate.`, suggestedDuration: suggested, family: null, sampleSize: filteredWithMeta.length, computedMedian: suggested }
     }
     const m = suggestion.match(/(\d{1,4})\s*(minutes|mins|m)/i)
     const suggestedDuration = m ? Number(m[1]) : suggested
-    return { message: suggestion.trim(), suggestedDuration, family: null, sampleSize: filteredWithMeta.length, computedMedian: suggested }
+    return { message: replaceMinutesWithHoursText(suggestion.trim()), suggestedDuration, family: null, sampleSize: filteredWithMeta.length, computedMedian: suggested }
   }
 
   return null
