@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { parseISO, format } from 'date-fns'
 import { CheckCircle, Circle, Trash2, Plus, Clock, Calendar as CalIcon, X } from 'lucide-react'
+import { supabase } from '../lib/supabase'
 import { getTasksForDate, saveTasksForDate } from '../lib/taskStore'
 import type { Task } from '../lib/taskStore'
 
@@ -66,6 +67,79 @@ export default function DayView() {
         const updated = tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t)
         setTasks(updated)
         saveTasksForDate(dateKey, updated)
+    }
+
+    // --- Completion modal flow ---
+    const [showCompleteModal, setShowCompleteModal] = useState(false)
+    const [modalTask, setModalTask] = useState<Task | null>(null)
+    // use string so the input can be fully cleared by the user (empty string)
+    const [actualDuration, setActualDuration] = useState<string>('')
+    const [completionError, setCompletionError] = useState<string | null>(null)
+
+    const openCompleteModal = (task: Task) => {
+        setModalTask(task)
+        // Prefill with the estimated duration, but keep as string so user can clear it
+        setActualDuration(String(task.duration ?? 0))
+        setCompletionError(null)
+        setShowCompleteModal(true)
+    }
+
+    const cancelComplete = () => {
+        setShowCompleteModal(false)
+        setModalTask(null)
+        setCompletionError(null)
+    }
+
+    const confirmComplete = async () => {
+        if (!modalTask) return
+
+        // validate actualDuration is a positive integer
+        const parsed = parseInt(actualDuration, 10)
+        if (isNaN(parsed) || parsed <= 0) {
+            setCompletionError('Please enter a positive number of minutes')
+            return
+        }
+
+        // Prepare record to insert (match requested schema)
+        const record = {
+            title: modalTask.title,
+            category: modalTask.category,
+            date: dateKey, // yyyy-MM-dd string
+            estimated_time: modalTask.duration,
+            actual_time: parsed,
+            completed_at: new Date().toISOString(),
+        }
+
+        try {
+            // Attach authenticated user info (id and email) so records are per-user
+            const { data: userData, error: userErr } = await supabase.auth.getUser()
+            if (userErr) console.warn('Could not fetch user from supabase.auth.getUser()', userErr)
+
+            const enriched = {
+                ...record,
+                user_id: userData?.user?.id ?? null,
+                user_email: userData?.user?.email ?? null,
+            }
+
+            const { error } = await supabase.from('task_completions').insert(enriched)
+            if (error) {
+                console.error('Supabase insert error', error)
+                setCompletionError(error.message || 'Failed to save completion')
+                // still mark locally so user sees it as completed
+            }
+        } catch (err) {
+            console.error('Supabase insert exception', err)
+            setCompletionError(String(err))
+        }
+
+        // Mark the task completed locally and persist
+        const updated = tasks.map(t => t.id === modalTask.id ? { ...t, completed: true } : t)
+        setTasks(updated)
+        saveTasksForDate(dateKey, updated)
+
+        // close modal
+        setShowCompleteModal(false)
+        setModalTask(null)
     }
 
     const deleteTask = (id: number) => {
@@ -294,7 +368,7 @@ export default function DayView() {
                                 }}
                             >
                                 <button 
-                                    onClick={() => toggleTask(task.id)}
+                                    onClick={() => task.completed ? toggleTask(task.id) : openCompleteModal(task)}
                                     style={{ color: task.completed ? '#22c55e' : '#e5e5e5', background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', justifyContent: 'center' }}
                                 >
                                     {task.completed ? <CheckCircle size={20} /> : <Circle size={20} />}
@@ -420,6 +494,40 @@ export default function DayView() {
                                 Create Task
                             </button>
                         </form>
+                    </div>
+                </div>
+            )}
+
+            {/* Completion modal */}
+            {showCompleteModal && modalTask && (
+                <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 60 }}>
+                    <div style={{ backgroundColor: '#18181b', borderRadius: '16px', width: '100%', maxWidth: '420px', padding: '20px', border: '1px solid #3f3f46' }}>
+                        <div className="flex justify-between items-center mb-4">
+                            <h3 className="text-lg font-bold">How long did this take?</h3>
+                            <button onClick={cancelComplete} style={{ color: '#a1a1aa', background: 'none', border: 'none', cursor: 'pointer' }}>
+                                <X size={18} />
+                            </button>
+                        </div>
+
+                        <p style={{ color: '#94a3b8', marginBottom: 12 }}>{modalTask.title} — {modalTask.category}</p>
+
+                        <div style={{ marginBottom: 12 }}>
+                            <label style={{ display: 'block', fontSize: '12px', fontWeight: '700', color: '#a1a1aa', marginBottom: 6 }}>Actual duration (minutes)</label>
+                            <input
+                                type="number"
+                                value={actualDuration}
+                                onChange={(e) => setActualDuration(e.target.value)}
+                                step={5}
+                                style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #3f3f46', backgroundColor: '#27272a', color: '#fff' }}
+                            />
+                        </div>
+
+                        {completionError && <p style={{ color: '#f87171', marginBottom: 8 }}>{completionError}</p>}
+
+                        <div style={{ display: 'flex', gap: 12, marginTop: 6 }}>
+                            <button onClick={confirmComplete} className="button" style={{ flex: 1 }}>Confirm</button>
+                            <button onClick={cancelComplete} className="button" style={{ flex: 1, background: '#6b7280', color: '#fff' }}>Cancel</button>
+                        </div>
                     </div>
                 </div>
             )}
