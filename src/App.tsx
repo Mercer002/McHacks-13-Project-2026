@@ -15,12 +15,32 @@ export default function App() {
   const [session, setSession] = useState<any>(null)
   const [loading, setLoading] = useState(true)
 
+  const handleLogout = async () => {
+    const { error } = await supabase.auth.signOut()
+
+    if (error) {
+      console.error('Supabase sign out failed, clearing local session', error)
+      await supabase.auth.signOut({ scope: 'local' })
+    }
+
+    setSession(null)
+  }
+
   useEffect(() => {
     // Get initial session
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session)
-      setLoading(false)
-    })
+    supabase.auth
+      .getSession()
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('Error fetching session', error)
+        }
+        setSession(data.session)
+      })
+      .catch(err => {
+        console.error('Unexpected session error', err)
+        setSession(null)
+      })
+      .finally(() => setLoading(false))
 
     // Listen for auth changes
     const { data: listener } = supabase.auth.onAuthStateChange(
@@ -41,7 +61,7 @@ export default function App() {
   return (
     <BrowserRouter>
       {/* Navbar only shows when logged in */}
-      {session && <Navbar />}
+      {session && <Navbar onLogout={handleLogout} />}
 
       <Routes>
         {/* ---------- AUTH ---------- */}
@@ -58,12 +78,24 @@ export default function App() {
         {/* ---------- APP ---------- */}
         <Route
           path="/calendar"
-          element={session ? <Calendar /> : <Navigate to="/login" />}
+          element={
+            session ? (
+              <Calendar userId={session.user.id} />
+            ) : (
+              <Navigate to="/login" />
+            )
+          }
         />
 
         <Route
           path="/day/:date"
-          element={session ? <Day /> : <Navigate to="/login" />}
+          element={
+            session ? (
+              <Day userId={session.user.id} />
+            ) : (
+              <Navigate to="/login" />
+            )
+          }
         />
 
         {/* ---------- DEFAULT ---------- */}

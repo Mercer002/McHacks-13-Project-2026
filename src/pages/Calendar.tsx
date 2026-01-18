@@ -1,69 +1,65 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'   // ✅ add useLocation
+import { useNavigate } from 'react-router-dom'
 import { format } from 'date-fns'
 import Calendar from 'react-calendar'
 import { ChevronLeft, ChevronRight, Plus, Calendar as CalIcon } from 'lucide-react'
 import 'react-calendar/dist/Calendar.css'
-import { fetchTasksForDate, fetchTasksForMonth } from '../lib/tasksApi'
-import type { Task } from '../lib/tasksApi'
+import { getDatesWithTasks, getTasksForDate } from '../lib/taskStore'
+import type { Task } from '../lib/taskStore'
 
-export default function MyCalendar() {
-  const [date, setDate] = useState<Date>(new Date())
+type Props = {
+  userId: string
+}
+
+export default function MyCalendar({ userId }: Props) {
+  const [date, setDate] = useState<Date>(() => {
+    try {
+      const raw = localStorage.getItem('calendar.selectedDate')
+      if (raw) {
+        const parsed = new Date(raw)
+        if (!isNaN(parsed.getTime())) return parsed
+      }
+    } catch (err) {
+      // ignore
+    }
+    return new Date()
+  })
   const [tasks, setTasks] = useState<Task[]>([])
   const [datesWithTasks, setDatesWithTasks] = useState<Set<string>>(new Set())
-  const [tasksByDay, setTasksByDay] = useState<Record<string, Task[]>>({})
+  const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
-  const location = useLocation() // ✅
 
+  const today = useMemo(() => new Date(), [])
+  const todayKey = useMemo(() => format(today, 'yyyy-MM-dd'), [today])
+  const todayLabel = useMemo(() => format(today, 'MMM d'), [today])
   const monthLabel = useMemo(() => format(date, 'MMMM yyyy'), [date])
   const dateKey = useMemo(() => format(date, 'yyyy-MM-dd'), [date])
 
-  const computeMonthTaskDays = async (anyDateInMonth: Date) => {
-    const year = anyDateInMonth.getFullYear()
-    const month = anyDateInMonth.getMonth()
-
-    const startDay = format(new Date(year, month, 1), 'yyyy-MM-dd')
-    const endDay = format(new Date(year, month + 1, 0), 'yyyy-MM-dd')
-
-    const monthTasks = await fetchTasksForMonth(startDay, endDay)
-
-    const byDay: Record<string, Task[]> = {}
-    for (const t of monthTasks) {
-      if (!byDay[t.day]) byDay[t.day] = []
-      byDay[t.day].push(t)
-    }
-
-    // sort each day just in case
-    for (const d of Object.keys(byDay)) {
-      byDay[d].sort((a, b) => a.time.localeCompare(b.time))
-    }
-
-    setTasksByDay(byDay)
-    setDatesWithTasks(new Set(Object.keys(byDay)))
-  }
-
-
   useEffect(() => {
-    fetchTasksForDate(dateKey).then(setTasks).catch(console.error)
-  }, [dateKey])
-
-  // ✅ keep existing month compute
-  useEffect(() => {
-    computeMonthTaskDays(date).catch(console.error)
-  }, [date])
-
-  // ✅ NEW: when you come back to calendar route, refresh month dots + day list
-  useEffect(() => {
-    if (location.pathname.startsWith('/calendar')) {
-      fetchTasksForDate(dateKey).then(setTasks).catch(console.error)
-      computeMonthTaskDays(date).catch(console.error)
+    if (!userId) return
+    try {
+      setTasks(getTasksForDate(userId, dateKey))
+      setDatesWithTasks(getDatesWithTasks(userId))
+      setError(null)
+    } catch (err) {
+      console.error('Task load error', err)
+      setError('Unable to load tasks right now.')
     }
-  }, [location.pathname]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [userId, dateKey])
 
   const handleDayClick = (clickedDate: Date) => {
     const pathDate = format(clickedDate, 'yyyy-MM-dd')
     navigate(`/day/${pathDate}`)
   }
+
+  // Save selected date (so returning to calendar restores the exact date/month)
+  useEffect(() => {
+    try {
+      localStorage.setItem('calendar.selectedDate', date.toISOString())
+    } catch (err) {
+      // ignore
+    }
+  }, [date])
 
   return (
     // MASTER CONTAINER: Forces White Background & Dark Text NO MATTER WHAT
@@ -178,11 +174,7 @@ export default function MyCalendar() {
           {/* Navigation Arrows */}
           <div style={{ display: 'flex', gap: '4px', marginLeft: '20px', backgroundColor: '#f3f4f6', padding: '4px', borderRadius: '8px' }}>
             <button 
-              onClick={() => setDate(prev => {
-                const next = new Date(prev)
-                next.setMonth(prev.getMonth() - 1)
-                return next
-              })}
+              onClick={() => setDate(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1))}
               style={{ padding: '6px', border: 'none', background: 'transparent', cursor: 'pointer', color: '#4b5563' }}
             >
               <ChevronLeft size={20} />
@@ -194,11 +186,7 @@ export default function MyCalendar() {
               Today
             </button>
             <button 
-              onClick={() => setDate(prev => {
-                const next = new Date(prev)
-                next.setMonth(prev.getMonth() + 1)
-                return next
-              })}
+              onClick={() => setDate(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1))}
               style={{ padding: '6px', border: 'none', background: 'transparent', cursor: 'pointer', color: '#4b5563' }}
             >
               <ChevronRight size={20} />
@@ -220,11 +208,17 @@ export default function MyCalendar() {
             cursor: 'pointer',
             boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
           }}
-          onClick={() => handleDayClick(date)}
+          onClick={() => navigate(`/day/${todayKey}`)}
         >
-          <Plus size={18} /> Add Task for {format(date, 'MMM d')}
+          <Plus size={18} /> Add Task for Today ({todayLabel})
         </button>
       </header>
+
+      {error && (
+        <div style={{ padding: '12px 40px', color: '#dc2626', fontWeight: 600 }}>
+          {error}
+        </div>
+      )}
 
       {/* --- MAIN CALENDAR AREA --- */}
       <div style={{ flex: 1, padding: '40px', overflowY: 'auto', backgroundColor: '#ffffff' }}>
@@ -244,53 +238,46 @@ export default function MyCalendar() {
             tileContent={({ date, view }) => {
               if (view !== 'month') return null
               const key = format(date, 'yyyy-MM-dd')
-              const dayTasks = tasksByDay[key]
-              if (!dayTasks || dayTasks.length === 0) return null
+              const hasTasks = datesWithTasks.has(key)
+              if (!hasTasks) return null
 
-              const top = dayTasks.slice(0, 3)
+              const dayTasks = getTasksForDate(userId, key)
+                .slice()
+                .sort((a, b) => a.time.localeCompare(b.time))
+                .slice(0, 3)
 
               return (
-                <div style={{ width: '100%', marginTop: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 6 }}>
-                    <span
-                      style={{
-                        width: 8,
-                        height: 8,
-                        borderRadius: 999,
-                        background: '#22c55e',
-                        display: 'inline-block',
-                      }}
-                    />
-                    {dayTasks.length > 3 && (
-                      <span style={{ marginLeft: 6, fontSize: 11, color: '#6b7280' }}>
-                        +{dayTasks.length - 3}
-                      </span>
-                    )}
-                  </div>
-
-                  <div style={{ width: '100%', display: 'grid', gap: 4 }}>
-                    {top.map((t) => (
+                <div style={{ width: '100%', marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {dayTasks.map(task => {
+                    const isDone = task.completed
+                    return (
                       <div
-                        key={t.id}
+                        key={task.id}
                         style={{
                           width: '100%',
                           fontSize: 11,
                           lineHeight: 1.1,
-                          color: '#111827',
-                          background: '#f3f4f6',
+                          color: isDone ? '#6b7280' : '#111827',
+                          background: isDone ? '#f3f4f6' : '#f0fdf4',
                           border: '1px solid #e5e7eb',
                           borderRadius: 6,
                           padding: '3px 6px',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
+                          fontWeight: 600,
                           textAlign: 'left',
+                          borderLeft: `3px solid ${isDone ? '#9ca3af' : '#22c55e'}`,
+                          opacity: isDone ? 0.65 : 1,
                         }}
+                        title={task.title}
                       >
-                        {t.time} {t.title}
+                        {task.title}
                       </div>
-                    ))}
-                  </div>
+                    )
+                  })}
+                  {getTasksForDate(userId, key).length > 3 && (
+                    <div style={{ fontSize: '11px', color: '#6b7280' }}>+ more…</div>
+                  )}
                 </div>
               )
             }}
@@ -299,18 +286,18 @@ export default function MyCalendar() {
           />
 
           <div style={{ marginTop: '16px', padding: '12px', background: '#f9fafb', borderRadius: '12px', border: '1px solid #e5e7eb' }}>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>Tasks on {format(date, 'MMM d, yyyy')}</div>
-            {tasks.length === 0 && <div style={{ color: '#6b7280' }}>No tasks yet. Click a day to add one.</div>}
-            {tasks.length > 0 && (
-              <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 6 }}>
-                {tasks
-                  .slice()
-                  .sort((a, b) => a.time.localeCompare(b.time))
-                  .map(task => (
-                    <li key={task.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px' }}>
-                      <span style={{ fontWeight: 600, color: '#111827' }}>{task.title}</span>
-                      <span style={{ color: '#6b7280', fontSize: 12 }}>{task.time} • {task.category}</span>
-                    </li>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Tasks on {format(date, 'MMM d, yyyy')}</div>
+          {tasks.length === 0 && <div style={{ color: '#6b7280' }}>No tasks yet. Click a day to add one.</div>}
+          {tasks.length > 0 && (
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 6 }}>
+              {tasks
+                .slice()
+                .sort((a, b) => a.time.localeCompare(b.time))
+                .map(task => (
+                  <li key={task.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px' }}>
+                    <span style={{ fontWeight: 600, color: '#111827' }}>{task.title}</span>
+                    <span style={{ color: '#6b7280', fontSize: 12 }}>{task.time} • {task.category}</span>
+                  </li>
                   ))}
               </ul>
             )}
