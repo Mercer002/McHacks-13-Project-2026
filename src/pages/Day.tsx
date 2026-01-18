@@ -428,7 +428,7 @@ export default function DayView({ userId }: Props) {
                 setAiFamily((result as any).family ?? null)
                 setAiSampleSize((result as any).sampleSize ?? null)
                 setAiComputedMedian((result as any).computedMedian ?? null)
-                setAiDurationInput(formatMinutesToHHMM(newTask.duration))
+                setAiDurationInput(formatMinutesToHHMM(result.suggestedDuration ?? newTask.duration))
                 setPendingFromAiQueue(false)
                 setPendingNewTask(newTask)
                 setShowAiModal(true)
@@ -456,31 +456,57 @@ export default function DayView({ userId }: Props) {
     }
 
     const persistPendingTask = async (useSuggested: boolean) => {
-        if (!pendingNewTask) return
-        const isAiQueue = pendingFromAiQueue
-        const baseDuration = useSuggested && aiSuggestedDuration ? aiSuggestedDuration : pendingNewTask.duration ?? 60
-        const nextDuration = parseDurationStringToMinutes(aiDurationInput, baseDuration)
-        const taskToSave = { ...pendingNewTask, duration: nextDuration }
-        const day = taskToSave.dateKey ?? dateKey
-        const existing = getTasksForDate(userId, day) ?? []
-        const updated = [...existing, taskToSave].sort((a, b) => a.time.localeCompare(b.time))
-        saveTasksForDate(userId, day, updated)
-        if (day === dateKey) {
-            setTasks(updated)
-        }
-        setPendingNewTask(null)
-        setShowAiModal(false)
-        setAiSuggestion(null)
-        setAiSuggestedDuration(null)
-        setAiFamily(null)
-        setAiSampleSize(null)
-        setAiComputedMedian(null)
-        setAddressLookupStatus(null)
-        setAddressLookupMinutes(null)
-        setPendingFromAiQueue(false)
-        setAiDurationInput('')
-        if (isAiQueue) {
-            setAiTaskQueue(prev => prev.slice(1))
+        try {
+            if (!pendingNewTask) {
+                // Nothing to save; close the modal so the user isn’t stuck
+                setShowAiModal(false)
+                setAiSuggestion(null)
+                setAiSuggestedDuration(null)
+                setAiFamily(null)
+                setAiSampleSize(null)
+                setAiComputedMedian(null)
+                setAiDurationInput('')
+                setPendingFromAiQueue(false)
+                setAiStatus('Nothing to save for this suggestion.')
+                return
+            }
+            const isAiQueue = pendingFromAiQueue
+            const baseDuration = Math.max(
+                1,
+                useSuggested && aiSuggestedDuration ? aiSuggestedDuration : pendingNewTask.duration ?? 60
+            )
+            // If user clicks "Keep my estimate", ignore the suggested input and keep original duration
+            const durationInputValue = useSuggested
+                ? aiDurationInput
+                : formatMinutesToHHMM(pendingNewTask.duration ?? baseDuration)
+            const nextDuration = Math.max(1, parseDurationStringToMinutes(durationInputValue, baseDuration))
+            const taskToSave = { ...pendingNewTask, duration: nextDuration }
+            const day = taskToSave.dateKey ?? dateKey
+            const existing = getTasksForDate(userId, day) ?? []
+            const updated = [...existing, taskToSave].sort((a, b) => a.time.localeCompare(b.time))
+            saveTasksForDate(userId, day, updated)
+            if (day === dateKey) {
+                setTasks(updated)
+            }
+            setAiStatus(`Saved "${taskToSave.title}" (${taskToSave.duration}m).`)
+            if (isAiQueue) {
+                setAiTaskQueue(prev => prev.slice(1))
+            }
+            setShowAiModal(false)
+            setAiSuggestion(null)
+            setAiSuggestedDuration(null)
+            setAiFamily(null)
+            setAiSampleSize(null)
+            setAiComputedMedian(null)
+            setAiDurationInput('')
+            setPendingFromAiQueue(false)
+            setShowAdd(false)
+            setPendingNewTask(null)
+            setAddressLookupStatus(null)
+            setAddressLookupMinutes(null)
+        } catch (err) {
+            console.error('Persist AI suggestion failed', err)
+            setAiStatus('Failed to save task from suggestion.')
         }
     }
 
@@ -537,7 +563,7 @@ export default function DayView({ userId }: Props) {
                 setAiFamily((result as any).family ?? null)
                 setAiSampleSize((result as any).sampleSize ?? null)
                 setAiComputedMedian((result as any).computedMedian ?? null)
-                setAiDurationInput(formatMinutesToHHMM(updated.duration))
+                setAiDurationInput(formatMinutesToHHMM(result.suggestedDuration ?? updated.duration))
                 setPendingFromAiQueue(false)
                 setPendingNewTask(updated)
                 setShowAiModal(true)
@@ -564,7 +590,7 @@ export default function DayView({ userId }: Props) {
                 setAiFamily((result as any).family ?? null)
                 setAiSampleSize((result as any).sampleSize ?? null)
                 setAiComputedMedian((result as any).computedMedian ?? null)
-                setAiDurationInput(formatMinutesToHHMM(updated.duration))
+                setAiDurationInput(formatMinutesToHHMM(result.suggestedDuration ?? updated.duration))
                 setPendingFromAiQueue(false)
                 setPendingNewTask(updated)
                 setShowAiModal(true)
@@ -601,10 +627,11 @@ export default function DayView({ userId }: Props) {
 
             const data = await res.json().catch(() => ({}))
             if (!res.ok) {
+                const detail = data?.details ? ` Details: ${data.details}` : ''
                 if (res.status === 401) {
-                    setAiStatus('AI request failed (401). Check your Supabase anon key / function auth.')
+                    setAiStatus(`AI request failed (401). Check your Supabase anon key / function auth.${detail}`)
                 } else {
-                    setAiStatus(data?.error ? `AI error: ${data.error}` : `AI request failed (${res.status})`)
+                    setAiStatus(data?.error ? `AI error: ${data.error}${detail}` : `AI request failed (${res.status})${detail}`)
                 }
                 return
             }

@@ -68,13 +68,14 @@ Rules:
 
     if (!aiResp.ok) {
       const errorText = await aiResp.text()
+      const status = aiResp.status
       return new Response(
         JSON.stringify({
-          error: `Gemini request failed (${aiResp.status})`,
+          error: `Gemini request failed (${status})`,
           details: errorText,
         }),
         {
-          status: 500,
+          status,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         },
       )
