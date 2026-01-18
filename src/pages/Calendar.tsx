@@ -29,6 +29,9 @@ export default function MyCalendar({ userId }: Props) {
   const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
 
+  const today = useMemo(() => new Date(), [])
+  const todayKey = useMemo(() => format(today, 'yyyy-MM-dd'), [today])
+  const todayLabel = useMemo(() => format(today, 'MMM d'), [today])
   const monthLabel = useMemo(() => format(date, 'MMMM yyyy'), [date])
   const dateKey = useMemo(() => format(date, 'yyyy-MM-dd'), [date])
 
@@ -206,9 +209,9 @@ export default function MyCalendar({ userId }: Props) {
             cursor: 'pointer',
             boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)'
           }}
-          onClick={() => handleDayClick(date)}
+          onClick={() => navigate(`/day/${todayKey}`)}
         >
-          <Plus size={18} /> Add Task for {format(date, 'MMM d')}
+          <Plus size={18} /> Add Task for Today ({todayLabel})
         </button>
       </header>
 
