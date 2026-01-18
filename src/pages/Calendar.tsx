@@ -1,27 +1,65 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useLocation } from 'react-router-dom'   // ✅ add useLocation
 import { format } from 'date-fns'
 import Calendar from 'react-calendar'
 import { ChevronLeft, ChevronRight, Plus, Calendar as CalIcon } from 'lucide-react'
 import 'react-calendar/dist/Calendar.css'
-import { getDatesWithTasks, getTasksForDate } from '../lib/taskStore'
-import type { Task } from '../lib/taskStore'
+import { fetchTasksForDate, fetchTasksForMonth } from '../lib/tasksApi'
+import type { Task } from '../lib/tasksApi'
 
 export default function MyCalendar() {
   const [date, setDate] = useState<Date>(new Date())
   const [tasks, setTasks] = useState<Task[]>([])
   const [datesWithTasks, setDatesWithTasks] = useState<Set<string>>(new Set())
+  const [tasksByDay, setTasksByDay] = useState<Record<string, Task[]>>({})
   const navigate = useNavigate()
+  const location = useLocation() // ✅
 
   const monthLabel = useMemo(() => format(date, 'MMMM yyyy'), [date])
   const dateKey = useMemo(() => format(date, 'yyyy-MM-dd'), [date])
 
+  const computeMonthTaskDays = async (anyDateInMonth: Date) => {
+    const year = anyDateInMonth.getFullYear()
+    const month = anyDateInMonth.getMonth()
+
+    const startDay = format(new Date(year, month, 1), 'yyyy-MM-dd')
+    const endDay = format(new Date(year, month + 1, 0), 'yyyy-MM-dd')
+
+    const monthTasks = await fetchTasksForMonth(startDay, endDay)
+
+    const byDay: Record<string, Task[]> = {}
+    for (const t of monthTasks) {
+      if (!byDay[t.day]) byDay[t.day] = []
+      byDay[t.day].push(t)
+    }
+
+    // sort each day just in case
+    for (const d of Object.keys(byDay)) {
+      byDay[d].sort((a, b) => a.time.localeCompare(b.time))
+    }
+
+    setTasksByDay(byDay)
+    setDatesWithTasks(new Set(Object.keys(byDay)))
+  }
+
+
   useEffect(() => {
-    setTasks(getTasksForDate(dateKey))
-    setDatesWithTasks(getDatesWithTasks())
+    fetchTasksForDate(dateKey).then(setTasks).catch(console.error)
   }, [dateKey])
 
-  // Navigate to Day View on click
+  // ✅ keep existing month compute
+  useEffect(() => {
+    computeMonthTaskDays(date).catch(console.error)
+  }, [date])
+
+  // ✅ NEW: when you come back to calendar route, refresh month dots + day list
+  useEffect(() => {
+    if (location.pathname.startsWith('/calendar')) {
+      fetchTasksForDate(dateKey).then(setTasks).catch(console.error)
+      computeMonthTaskDays(date).catch(console.error)
+    }
+  }, [location.pathname]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const handleDayClick = (clickedDate: Date) => {
     const pathDate = format(clickedDate, 'yyyy-MM-dd')
     navigate(`/day/${pathDate}`)
@@ -206,39 +244,58 @@ export default function MyCalendar() {
             tileContent={({ date, view }) => {
               if (view !== 'month') return null
               const key = format(date, 'yyyy-MM-dd')
-              const dayTasks = datesWithTasks.has(key) ? getTasksForDate(key) : []
-              if (dayTasks.length === 0) return null
+              const dayTasks = tasksByDay[key]
+              if (!dayTasks || dayTasks.length === 0) return null
+
+              const top = dayTasks.slice(0, 3)
 
               return (
-                <div style={{ width: '100%', marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  {dayTasks
-                    .slice()
-                    .sort((a, b) => a.time.localeCompare(b.time))
-                    .slice(0, 3)
-                    .map(task => (
+                <div style={{ width: '100%', marginTop: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'flex-start', marginBottom: 6 }}>
+                    <span
+                      style={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: 999,
+                        background: '#22c55e',
+                        display: 'inline-block',
+                      }}
+                    />
+                    {dayTasks.length > 3 && (
+                      <span style={{ marginLeft: 6, fontSize: 11, color: '#6b7280' }}>
+                        +{dayTasks.length - 3}
+                      </span>
+                    )}
+                  </div>
+
+                  <div style={{ width: '100%', display: 'grid', gap: 4 }}>
+                    {top.map((t) => (
                       <div
-                        key={task.id}
+                        key={t.id}
                         style={{
-                          fontSize: '11px',
-                          backgroundColor: task.completed ? '#f3f4f6' : '#f0fdf4',
-                          color: task.completed ? '#475569' : '#15803d',
-                          padding: '4px 8px',
-                          borderRadius: '4px',
                           width: '100%',
-                          whiteSpace: 'nowrap',
+                          fontSize: 11,
+                          lineHeight: 1.1,
+                          color: '#111827',
+                          background: '#f3f4f6',
+                          border: '1px solid #e5e7eb',
+                          borderRadius: 6,
+                          padding: '3px 6px',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
-                          fontWeight: 500,
+                          whiteSpace: 'nowrap',
                           textAlign: 'left',
-                          borderLeft: `3px solid ${task.completed ? '#9ca3af' : '#22c55e'}`,
                         }}
                       >
-                        {task.time} • {task.title}
+                        {t.time} {t.title}
                       </div>
                     ))}
+                  </div>
                 </div>
               )
             }}
+
+
           />
 
           <div style={{ marginTop: '16px', padding: '12px', background: '#f9fafb', borderRadius: '12px', border: '1px solid #e5e7eb' }}>

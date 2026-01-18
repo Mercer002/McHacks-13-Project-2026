@@ -2,8 +2,11 @@ import { useEffect, useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { parseISO, format } from 'date-fns'
 import { CheckCircle, Circle, Trash2, Plus, Clock, Calendar as CalIcon, X } from 'lucide-react'
-import { getTasksForDate, saveTasksForDate } from '../lib/taskStore'
-import type { Task } from '../lib/taskStore'
+import { fetchTasksForDate, createTask, setTaskCompleted, deleteTaskById } from '../lib/tasksApi'
+import type { Task } from '../lib/tasksApi'
+import { supabase } from '../lib/supabase'
+
+
 
 export default function DayView() {
     const { date } = useParams()
@@ -19,8 +22,11 @@ export default function DayView() {
     const dateKey = useMemo(() => format(parsedDate, 'yyyy-MM-dd'), [parsedDate])
 
     useEffect(() => {
-        setTasks(getTasksForDate(dateKey))
+    fetchTasksForDate(dateKey)
+        .then(setTasks)
+        .catch((e) => console.error('fetchTasksForDate error', e))
     }, [dateKey])
+
 
     // --- CONFIGURATION ---
     const startHour = 0
@@ -32,6 +38,8 @@ export default function DayView() {
     const durationOptions = [15, 30, 45, 60, 90, 120, 180]
     
     // --- STATE ---
+    const [aiText, setAiText] = useState("")
+    const [aiLoading, setAiLoading] = useState(false)
     const [taskName, setTaskName] = useState('')
     const [taskHour, setTaskHour] = useState('09')
     const [taskMinute, setTaskMinute] = useState('00')
@@ -40,39 +48,131 @@ export default function DayView() {
     const [showAdd, setShowAdd] = useState(false)
 
     // --- ACTIONS ---
-    const addTask = (e: React.FormEvent) => {
+    const addTask = async (e: React.FormEvent) => {
         e.preventDefault()
         if (!taskName) return
+
         const composedTime = `${taskHour.padStart(2, '0')}:${taskMinute.padStart(2, '0')}`
-        const newTask: Task = {
-            id: Date.now(),
+
+        try {
+            const created = await createTask({
+            day: dateKey,
             title: taskName,
-            completed: false,
             time: composedTime,
             duration: taskDuration,
-            category: taskCategory
+            category: taskCategory,
+            location: null,
+            })
+
+            setTasks((prev) => [...prev, created])
+
+            setTaskName('')
+            setTaskHour('09')
+            setTaskMinute('00')
+            setTaskDuration(60)
+            setShowAdd(false)
+        } catch (e) {
+            console.error('createTask error', e)
+            alert('Failed to create task (check console)')
         }
-        const updated = [...tasks, newTask]
-        setTasks(updated)
-        saveTasksForDate(dateKey, updated)
-        setTaskName('')
-        setTaskHour('09')
-        setTaskMinute('00')
-        setTaskDuration(60)
-        setShowAdd(false)
     }
 
-    const toggleTask = (id: number) => {
-        const updated = tasks.map(t => t.id === id ? { ...t, completed: !t.completed } : t)
-        setTasks(updated)
-        saveTasksForDate(dateKey, updated)
+
+    const toggleTask = async (id: number) => {
+        const current = tasks.find(t => t.id === id)
+        if (!current) return
+
+        try {
+            const updated = await setTaskCompleted(id, !current.completed)
+            setTasks((prev) => prev.map(t => (t.id === id ? updated : t)))
+        } catch (e) {
+            console.error('setTaskCompleted error', e)
+            alert('Failed to update task (check console)')
+        }
+    }
+    const runAiCommand = async () => {
+        if (!aiText.trim()) return
+        setAiLoading(true)
+        const { data: sessionData } = await supabase.auth.getSession()
+        console.log("SESSION", sessionData)
+
+        const token = sessionData.session?.access_token
+        console.log("TOKEN EXISTS?", !!token)
+
+        if (token) {
+        const payload = JSON.parse(atob(token.split(".")[1]))
+        console.log("JWT iss:", payload.iss)
+        console.log("JWT aud:", payload.aud)
+        }
+        console.log("ENV URL:", import.meta.env.VITE_SUPABASE_URL)
+        console.log("ENV REF:", import.meta.env.VITE_SUPABASE_URL?.split("//")[1]?.split(".")[0])
+
+        try {
+            const { data: sessionData } = await supabase.auth.getSession()
+            const token = sessionData.session?.access_token
+            if (!token) throw new Error("No session token")
+
+            const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/ai-command`
+
+            const res = await fetch(url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                // ✅ this is what fixes the 401
+                "Authorization": `Bearer ${token}`,
+                // also include apikey for safety
+                "apikey": import.meta.env.VITE_SUPABASE_ANON_KEY,
+            },
+            body: JSON.stringify({ text: aiText, dayKey: dateKey }),
+            })
+
+            const data = await res.json().catch(() => ({}))
+
+            if (!res.ok) {
+                console.error("edge error", res.status, data)
+                alert(`AI command failed: ${res.status}\n${data?.error ?? ""}`)
+                return
+            }
+
+            if (data?.error) {
+            console.error("function returned error", data)
+            alert(data.error)
+            return
+            }
+
+            const tasksFromAi = data?.tasks ?? []
+            for (const t of tasksFromAi) {
+            const created = await createTask({
+                day: t.day ?? dateKey,
+                title: t.title,
+                time: t.time,
+                duration: t.duration,
+                category: t.category,
+                location: t.location ?? null,
+            })
+            setTasks((prev) => [...prev, created])
+            }
+
+            setAiText("")
+        } catch (e) {
+            console.error(e)
+            alert("AI command failed (exception). Check console.")
+        } finally {
+            setAiLoading(false)
+        }
     }
 
-    const deleteTask = (id: number) => {
-        const updated = tasks.filter(t => t.id !== id)
-        setTasks(updated)
-        saveTasksForDate(dateKey, updated)
+
+    const deleteTask = async (id: number) => {
+        try {
+            await deleteTaskById(id)
+            setTasks((prev) => prev.filter(t => t.id !== id))
+        } catch (e) {
+            console.error('deleteTaskById error', e)
+            alert('Failed to delete task (check console)')
+        }
     }
+
 
     // --- LAYOUT LOGIC ---
     const getMinutesFromStart = (timeStr: string) => {
@@ -266,6 +366,40 @@ export default function DayView() {
                 </div>
 
                 {/* --- RIGHT: TASK LIST SIDEBAR --- */}
+                <div style={{ marginBottom: 12 }}>
+                    <div style={{ fontSize: 12, opacity: 0.8, marginBottom: 6 }}>AI assistant</div>
+                    <div style={{ display: "flex", gap: 8 }}>
+                        <input
+                        value={aiText}
+                        onChange={(e) => setAiText(e.target.value)}
+                        placeholder='e.g. "yoga tonight at 8"'
+                        style={{
+                            flex: 1,
+                            padding: "10px 12px",
+                            borderRadius: 10,
+                            border: "1px solid #3f3f46",
+                            background: "#27272a",
+                            color: "white",
+                        }}
+                        />
+                        <button
+                        onClick={runAiCommand}
+                        disabled={aiLoading}
+                        style={{
+                            padding: "10px 12px",
+                            borderRadius: 10,
+                            border: "none",
+                            background: aiLoading ? "#334155" : "#22c55e",
+                            color: "#0b1020",
+                            fontWeight: 700,
+                            cursor: "pointer",
+                        }}
+                        >
+                        {aiLoading ? "..." : "Run"}
+                        </button>
+                    </div>
+                </div>
+
                 <div style={{ width: 'clamp(220px, 18vw, 260px)', backgroundColor: '#18181b', borderLeft: '1px solid #3f3f46', padding: '20px', overflowY: 'auto', flexShrink: 0, height: '100%' }}>
                     <div className="flex items-center justify-between mb-6">
                         <h2 className="text-xl font-bold">Tasks</h2>
