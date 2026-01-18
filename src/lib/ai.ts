@@ -27,15 +27,42 @@ function similarityScore(a: string, b: string) {
     return w
   }
 
+  const synonyms: Record<string, string> = {
+    gym: 'workout',
+    workout: 'workout',
+    exercise: 'workout',
+    run: 'workout',
+    jogging: 'workout',
+    commute: 'commute',
+    drive: 'commute',
+    driving: 'commute',
+    bus: 'commute',
+    subway: 'commute',
+    train: 'commute',
+    study: 'study',
+    homework: 'study',
+    reading: 'study',
+    groceries: 'grocery',
+    grocery: 'grocery',
+    shop: 'grocery',
+    shopping: 'grocery',
+  }
+
+  const canonical = (word: string) => synonyms[word] ?? word
+
   const wa = normalize(a).split(/\s+/).filter(Boolean).map(stem)
   const wb = normalize(b).split(/\s+/).filter(Boolean).map(stem)
   if (wa.length === 0 || wb.length === 0) return 0
-  const setB = new Set(wb)
-  const common = wa.filter(w => setB.has(w)).length
+
+  const canonA = wa.map(canonical)
+  const canonB = wb.map(canonical)
+
+  const setB = new Set(canonB)
+  const common = canonA.filter(w => setB.has(w)).length
   if (common > 0) return common / Math.max(wa.length, wb.length)
 
   // Loose match: check token inclusion (handles grocery vs groceries, synonyms not covered)
-  const inclusion = wa.filter(w => wb.some(x => x.includes(w) || w.includes(x))).length
+  const inclusion = canonA.filter(w => canonB.some(x => x.includes(w) || w.includes(x))).length
   if (inclusion > 0) return inclusion / Math.max(wa.length, wb.length) * 0.75
 
   return 0
@@ -277,6 +304,13 @@ export async function classifyAndMatch(userId: string, title: string, estimatedM
   const past = (data as PastTask[]) ?? []
   if (past.length === 0) return null
 
+  // Heuristic semantic similarity fallback (helps trigger intent grouping like "go gym" vs "head to the gym")
+  const fallbackSimilar: number[] = []
+  past.forEach((p, idx) => {
+    const score = similarityScore(title, p.title ?? '')
+    if (score >= 0.25) fallbackSimilar.push(idx)
+  })
+
   // Build few-shot examples (keep them short)
   const fewShot = [
     { title: 'Grocery shop for the week', family: 'grocery' },
@@ -288,7 +322,7 @@ export async function classifyAndMatch(userId: string, title: string, estimatedM
 
   const pastList = past.map((p, i) => `${i}: ${p.title} — estimated ${p.estimated_time ?? 'N/A'}m, actual ${p.actual_time ?? 'N/A'}m`).join('\n')
 
-  const prompt = `You are an assistant that groups tasks into families (e.g. grocery, workout, commute) and finds past tasks similar to a new task.\n\nExamples:\n${examplesText}\n\nUser's new task:\nTitle: ${title}\nEstimated: ${estimatedMinutes} minutes\n\nPast completed tasks for this user (index: title — estimated, actual):\n${pastList}\n\nReturn only valid JSON with these keys: family (string|null), similar_indices (array of indices from the past list), avg_actual (number|null), suggested_duration (number|null), message (string|null). If no similar tasks, set similar_indices: [] and message: null. Keep the message concise.\n\nIMPORTANT: Make the 'message' a short, friendly, human-facing sentence that gives context. Prefer phrasing like: "When you did this, it typically took about X minutes (you estimated Y minutes).\" Example JSON message: { \"message\": \"When you did this it typically took about 45 minutes — you estimated 20 minutes. Consider increasing your estimate.\" } Ensure the message mentions the average actual time and the user's estimate when suggesting an increase.`
+  const prompt = `You are an assistant that groups tasks into families (e.g. grocery, workout, commute) and finds past tasks similar to a new task, even when phrased differently (e.g., "go gym", "head to the gym", "gym session" are the same intent). Be semantically flexible and prefer meaning over exact words.\n\nExamples:\n${examplesText}\n\nUser's new task:\nTitle: ${title}\nEstimated: ${estimatedMinutes} minutes\n\nPast completed tasks for this user (index: title — estimated, actual):\n${pastList}\n\nReturn only valid JSON with these keys: family (string|null), similar_indices (array of indices from the past list), avg_actual (number|null), suggested_duration (number|null), message (string|null). If no similar tasks, set similar_indices: [] and message: null. Keep the message concise.\n\nIMPORTANT: Make the 'message' a short, friendly, human-facing sentence that gives context. Prefer phrasing like: "When you did this, it typically took about X minutes (you estimated Y minutes).\" Example JSON message: { \"message\": \"When you did this it typically took about 45 minutes — you estimated 20 minutes. Consider increasing your estimate.\" } Ensure the message mentions the average actual time and the user's estimate when suggesting an increase.`
 
   const raw = await callGemini(prompt)
   console.log('classifyAndMatch raw model output:', raw)
@@ -309,7 +343,10 @@ export async function classifyAndMatch(userId: string, title: string, estimatedM
   if (!parsed) return null
 
   const family = parsed.family ?? null
-  const similar: number[] = Array.isArray(parsed.similar_indices) ? parsed.similar_indices.map((n: any) => Number(n)).filter((n: number) => !Number.isNaN(n) && n >= 0 && n < past.length) : []
+  let similar: number[] = Array.isArray(parsed.similar_indices) ? parsed.similar_indices.map((n: any) => Number(n)).filter((n: number) => !Number.isNaN(n) && n >= 0 && n < past.length) : []
+  if (similar.length === 0 && fallbackSimilar.length) {
+    similar = fallbackSimilar
+  }
   const suggested_duration = parsed.suggested_duration ?? parsed.suggestedDuration ?? null
   const message = parsed.message ?? null
 

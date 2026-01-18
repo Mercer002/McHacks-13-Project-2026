@@ -71,7 +71,7 @@ export default function DayView({ userId }: Props) {
     const [addressLookupStatus, setAddressLookupStatus] = useState<string | null>(null)
     const [addressLookupMinutes, setAddressLookupMinutes] = useState<number | null>(null)
     const [showMapModal, setShowMapModal] = useState(false)
-    const [mapSelectedPos, setMapSelectedPos] = useState<{ lat: number; lng: number } | null>(null)
+    const [, setMapSelectedPos] = useState<{ lat: number; lng: number } | null>(null)
     const [mapSelectedAddress, setMapSelectedAddress] = useState<string | null>(null)
     const [mapLoading, setMapLoading] = useState(false)
     // loading state intentionally omitted from UI for now
@@ -226,7 +226,7 @@ export default function DayView({ userId }: Props) {
 
     // --- Map modal: initialize Google Map and allow clicking to pick an address ---
     // When `showMapModal` becomes true we create a map in #task-map and attach a click listener.
-    // Clicking sets `mapSelectedPos` and reverse-geocodes to `mapSelectedAddress`.
+    // Map select flow is currently disabled; we keep `mapSelectedAddress` for potential reverse geocode results.
     useEffect(() => {
         if (!showMapModal) return
         let map: any = null
@@ -368,6 +368,12 @@ export default function DayView({ userId }: Props) {
         }
 
         const totalDuration = parseDurationInput(durationInput)
+        const taskStartMinutes = hh * 60 + mm
+        if (taskLocation && addressLookupMinutes && addressLookupMinutes > taskStartMinutes) {
+            setTravelStatus('Travel time exceeds available time before start. Pick an earlier start or shorter travel.')
+            return
+        }
+
         const newTask: Task = {
             id: makeTaskId(),
             title: taskName,
@@ -384,6 +390,8 @@ export default function DayView({ userId }: Props) {
         // If user provided a location, open our styled address modal to avoid any blank popups
         if (taskLocation) {
             setPendingAddressTask(newTask)
+            setAddressLookupStatus(null)
+            setAddressLookupMinutes(null)
             setShowAddressModal(true)
             return
         }
@@ -419,6 +427,8 @@ export default function DayView({ userId }: Props) {
         setAiFamily(null)
         setAiSampleSize(null)
         setAiComputedMedian(null)
+        setAddressLookupStatus(null)
+        setAddressLookupMinutes(null)
     }
 
     const dismissAiSuggestion = async () => {
@@ -456,7 +466,16 @@ export default function DayView({ userId }: Props) {
     const addressAddWithTravel = async () => {
         if (!pendingAddressTask) return
         const minutes = addressLookupMinutes ?? 0
-        const updated: Task = { ...pendingAddressTask, duration: pendingAddressTask.duration + minutes, travelMinutes: minutes }
+
+        // Validate travel vs start time
+        const [h, m] = pendingAddressTask.time.split(':').map(n => parseInt(n, 10) || 0)
+        const startMinutes = h * 60 + m
+        if (minutes > startMinutes) {
+            setAddressLookupStatus('Travel time exceeds available time before the start. Choose an earlier start or shorter travel.')
+            return
+        }
+
+        const updated: Task = { ...pendingAddressTask, travelMinutes: minutes }
         setShowAddressModal(false)
         setPendingAddressTask(null)
 
@@ -739,59 +758,106 @@ export default function DayView({ userId }: Props) {
 
                         {/* 2. THE TASKS */}
                         <div style={{ position: 'absolute', top: 0, bottom: 0, left: '72px', right: '0px' }}>
-                            {lanes.map((lane, laneIndex) => (
-                                lane.map(task => {
-                                    const top = getMinutesFromStart(task.time) * pxPerMinute
-                                    const widthPercent = 100 / lanes.length
-                                    const leftPercent = laneIndex * widthPercent
-                                    const heightPx = task.duration * pxPerMinute
+                            {lanes.map((lane, laneIndex) => {
+                                const widthPercent = 100 / lanes.length
+                                const leftPercent = laneIndex * widthPercent
+
+                                return lane.map(task => {
+                                    const taskStart = getMinutesFromStart(task.time)
+                                    const taskTop = taskStart * pxPerMinute
+                                    const taskHeightPx = task.duration * pxPerMinute
+
+                                    // Travel block sits immediately before the task window
+                                    const travelMins = task.travelMinutes ?? 0
+                                    const travelHeightPx = travelMins * pxPerMinute
+                                    const travelTop = Math.max(0, (taskStart - travelMins) * pxPerMinute)
+
                                     return (
-                                        <div
-                                            key={task.id}
-                                            style={{
-                                                position: 'absolute',
-                                                top: `${top}px`,
-                                                height: `${heightPx}px`,
-                                                left: `${leftPercent}%`,
-                                                width: `${widthPercent}%`,
-                                                padding: '4px',
-                                                zIndex: 10
-                                            }}
-                                        >
-                                            {/* Task Card */}
-                                            <div style={{ 
-                                                height: '100%',
-                                                width: '100%', 
-                                                borderRadius: '8px', 
-                                                backgroundColor: getTaskColor(task).bg,
-                                                border: `1px solid ${getTaskColor(task).border}`,
-                                                padding: '8px',
-                                                color: '#ffffff',
-                                                overflow: 'hidden',
-                                                display: 'flex',
-                                                flexDirection: 'column',
-                                                justifyContent: 'center',
-                                                opacity: task.completed ? 0.6 : 1
-                                            }}>
-                                                <div style={{ fontWeight: 'bold', fontSize: '14px', lineHeight: '1.2', wordBreak: 'break-word' }}>
-                                                    {task.title}
+                                        <div key={task.id}>
+                                            {travelMins > 0 && (
+                                                <div
+                                                    style={{
+                                                        position: 'absolute',
+                                                        top: `${travelTop}px`,
+                                                        height: `${Math.max(travelHeightPx, 26)}px`,
+                                                        left: `${leftPercent}%`,
+                                                        width: `${widthPercent}%`,
+                                                        padding: '4px',
+                                                        zIndex: 9,
+                                                    }}
+                                                >
+                                                    <div
+                                                        style={{
+                                                            height: '100%',
+                                                            width: '100%',
+                                                            borderRadius: '8px',
+                                                            backgroundColor: '#0c1e2f',
+                                                            border: `1px dashed ${getTaskColor(task).border}`,
+                                                            padding: '6px 10px',
+                                                            color: '#e2e8f0',
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'center',
+                                                            gap: 6,
+                                                            fontSize: '12px',
+                                                            fontWeight: 700,
+                                                            overflow: 'hidden',
+                                                            fontFamily: 'inherit',
+                                                        }}
+                                                    >
+                                                        <div style={{ whiteSpace: 'nowrap' }}>
+                                                            Travel: {task.travelMinutes}m {task.travelMode || 'driving'}
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px', flexWrap: 'wrap' }}>
-                                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', opacity: 0.8, padding: '4px 8px', borderRadius: '999px', backgroundColor: '#111827' }}>
-                                                        <Clock size={12} /> {task.time}
-                                                    </span>
-                                                    <span style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '999px', backgroundColor: '#1d4ed8', color: '#bfdbfe', fontWeight: 600 }}>
-                                                        {task.category}
-                                                    </span>
-                                                    <span style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '999px', backgroundColor: '#0f172a', color: '#e5e7eb', fontWeight: 600 }}>
-                                                        {task.duration}m
-                                                    </span>
+                                            )}
+
+                                            <div
+                                                style={{
+                                                    position: 'absolute',
+                                                    top: `${taskTop}px`,
+                                                    height: `${taskHeightPx}px`,
+                                                    left: `${leftPercent}%`,
+                                                    width: `${widthPercent}%`,
+                                                    padding: '4px',
+                                                    zIndex: 10,
+                                                }}
+                                            >
+                                                {/* Task Card */}
+                                                <div style={{ 
+                                                    height: '100%',
+                                                    width: '100%', 
+                                                    borderRadius: '8px', 
+                                                    backgroundColor: getTaskColor(task).bg,
+                                                    border: `1px solid ${getTaskColor(task).border}`,
+                                                    padding: '8px',
+                                                    color: '#ffffff',
+                                                    overflow: 'hidden',
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    justifyContent: 'center',
+                                                    opacity: task.completed ? 0.6 : 1
+                                                }}>
+                                                    <div style={{ fontWeight: 'bold', fontSize: '14px', lineHeight: '1.2', wordBreak: 'break-word' }}>
+                                                        {task.title}
+                                                    </div>
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px', flexWrap: 'wrap' }}>
+                                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', opacity: 0.8, padding: '4px 8px', borderRadius: '999px', backgroundColor: '#111827' }}>
+                                                            <Clock size={12} /> {task.time}
+                                                        </span>
+                                                        <span style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '999px', backgroundColor: '#1d4ed8', color: '#bfdbfe', fontWeight: 600 }}>
+                                                            {task.category}
+                                                        </span>
+                                                        <span style={{ fontSize: '12px', padding: '4px 8px', borderRadius: '999px', backgroundColor: '#0f172a', color: '#e5e7eb', fontWeight: 600 }}>
+                                                            {task.duration}m task
+                                                        </span>
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
                                     )
                                 })
-                            ))}
+                            })}
                         </div>
                     </div>
                 </div>
