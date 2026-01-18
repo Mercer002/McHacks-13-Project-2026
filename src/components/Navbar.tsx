@@ -1,13 +1,17 @@
 import { useState } from 'react'
-import { supabase } from '../lib/supabase'
 import { Settings } from 'lucide-react'
 import logo from '../assets/timepilot-logo.png'
 
-export default function Navbar() {
+type Props = {
+  onLogout: () => Promise<void>
+}
+
+export default function Navbar({ onLogout }: Props) {
   const [open, setOpen] = useState(false)
 
   const handleLogout = async () => {
-    await supabase.auth.signOut()
+    await onLogout()
+    setOpen(false)
   }
 
   return (

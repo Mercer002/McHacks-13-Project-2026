@@ -7,19 +7,31 @@ import 'react-calendar/dist/Calendar.css'
 import { getDatesWithTasks, getTasksForDate } from '../lib/taskStore'
 import type { Task } from '../lib/taskStore'
 
-export default function MyCalendar() {
+type Props = {
+  userId: string
+}
+
+export default function MyCalendar({ userId }: Props) {
   const [date, setDate] = useState<Date>(new Date())
   const [tasks, setTasks] = useState<Task[]>([])
   const [datesWithTasks, setDatesWithTasks] = useState<Set<string>>(new Set())
+  const [error, setError] = useState<string | null>(null)
   const navigate = useNavigate()
 
   const monthLabel = useMemo(() => format(date, 'MMMM yyyy'), [date])
   const dateKey = useMemo(() => format(date, 'yyyy-MM-dd'), [date])
 
   useEffect(() => {
-    setTasks(getTasksForDate(dateKey))
-    setDatesWithTasks(getDatesWithTasks())
-  }, [dateKey])
+    if (!userId) return
+    try {
+      setTasks(getTasksForDate(userId, dateKey))
+      setDatesWithTasks(getDatesWithTasks(userId))
+      setError(null)
+    } catch (err) {
+      console.error('Task load error', err)
+      setError('Unable to load tasks right now.')
+    }
+  }, [userId, dateKey])
 
   // Navigate to Day View on click
   const handleDayClick = (clickedDate: Date) => {
@@ -188,6 +200,12 @@ export default function MyCalendar() {
         </button>
       </header>
 
+      {error && (
+        <div style={{ padding: '12px 40px', color: '#dc2626', fontWeight: 600 }}>
+          {error}
+        </div>
+      )}
+
       {/* --- MAIN CALENDAR AREA --- */}
       <div style={{ flex: 1, padding: '40px', overflowY: 'auto', backgroundColor: '#ffffff' }}>
         <div style={{ 
@@ -206,54 +224,63 @@ export default function MyCalendar() {
             tileContent={({ date, view }) => {
               if (view !== 'month') return null
               const key = format(date, 'yyyy-MM-dd')
-              const dayTasks = datesWithTasks.has(key) ? getTasksForDate(key) : []
-              if (dayTasks.length === 0) return null
+              const hasTasks = datesWithTasks.has(key)
+              if (!hasTasks) return null
+
+              const dayTasks = getTasksForDate(userId, key)
+                .slice()
+                .sort((a, b) => a.time.localeCompare(b.time))
+                .slice(0, 3)
 
               return (
                 <div style={{ width: '100%', marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                  {dayTasks
-                    .slice()
-                    .sort((a, b) => a.time.localeCompare(b.time))
-                    .slice(0, 3)
-                    .map(task => (
+                  {dayTasks.map(task => {
+                    const isDone = task.completed
+                    return (
                       <div
                         key={task.id}
                         style={{
                           fontSize: '11px',
-                          backgroundColor: task.completed ? '#f3f4f6' : '#f0fdf4',
-                          color: task.completed ? '#475569' : '#15803d',
+                          backgroundColor: isDone ? '#f3f4f6' : '#f0fdf4',
+                          color: isDone ? '#6b7280' : '#15803d',
                           padding: '4px 8px',
                           borderRadius: '4px',
                           width: '100%',
                           whiteSpace: 'nowrap',
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
-                          fontWeight: 500,
+                          fontWeight: 600,
                           textAlign: 'left',
-                          borderLeft: `3px solid ${task.completed ? '#9ca3af' : '#22c55e'}`,
+                          borderLeft: `3px solid ${isDone ? '#9ca3af' : '#22c55e'}`,
+                          opacity: isDone ? 0.65 : 1,
                         }}
+                        title={task.title}
                       >
-                        {task.time} • {task.title}
+                        {task.title}
                       </div>
-                    ))}
+                    )
+                  })}
+                  {getTasksForDate(userId, key).length > 3 && (
+                    <div style={{ fontSize: '11px', color: '#6b7280' }}>+ more…</div>
+                  )}
                 </div>
               )
             }}
           />
 
           <div style={{ marginTop: '16px', padding: '12px', background: '#f9fafb', borderRadius: '12px', border: '1px solid #e5e7eb' }}>
-            <div style={{ fontWeight: 700, marginBottom: 8 }}>Tasks on {format(date, 'MMM d, yyyy')}</div>
-            {tasks.length === 0 && <div style={{ color: '#6b7280' }}>No tasks yet. Click a day to add one.</div>}
-            {tasks.length > 0 && (
-              <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 6 }}>
-                {tasks
-                  .slice()
-                  .sort((a, b) => a.time.localeCompare(b.time))
-                  .map(task => (
-                    <li key={task.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px' }}>
-                      <span style={{ fontWeight: 600, color: '#111827' }}>{task.title}</span>
-                      <span style={{ color: '#6b7280', fontSize: 12 }}>{task.time} • {task.category}</span>
-                    </li>
+          <div style={{ fontWeight: 700, marginBottom: 8 }}>Tasks on {format(date, 'MMM d, yyyy')}</div>
+          {tasks.length === 0 && <div style={{ color: '#6b7280' }}>No tasks yet. Click a day to add one.</div>}
+          {tasks.length > 0 && (
+            <ul style={{ listStyle: 'none', padding: 0, margin: 0, display: 'grid', gap: 6 }}>
+              {tasks
+                .slice()
+                .sort((a, b) => a.time.localeCompare(b.time))
+                .map(task => (
+                  <li key={task.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#fff', border: '1px solid #e5e7eb', borderRadius: 8, padding: '8px 10px' }}>
+                    <span style={{ fontWeight: 600, color: '#111827' }}>{task.title}</span>
+                    <span style={{ color: '#6b7280', fontSize: 12 }}>{task.time} • {task.category}</span>
+                  </li>
                   ))}
               </ul>
             )}
